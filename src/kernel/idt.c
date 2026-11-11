@@ -20,6 +20,7 @@
 #include "io.h"
 #include "vga.h"
 #include "kprintf.h"
+#include "task.h"
 
 #define PIC1_CMD  0x20
 #define PIC1_DATA 0x21
@@ -46,6 +47,7 @@ static irq_handler_t    irq_handlers[16];
 
 extern uint32_t isr_stub_table[48];   /* interrupts.s da */
 extern void idt_load(uint32_t);
+extern void isr129(void);          /* task_yield stub */
 
 static const char *exception_names[32] = {
     "Division By Zero (0 ga bo'lish)", "Debug", "Non Maskable Interrupt",
@@ -91,6 +93,7 @@ void idt_init(void)
 
     for (int i = 0; i < 48; i++)
         idt_set(i, isr_stub_table[i], 0x08, 0x8E);
+    idt_set(YIELD_VECTOR, (uint32_t)isr129, 0x08, 0x8E);
 
     pic_remap();
     idt_load((uint32_t)&idt_pointer);
@@ -130,20 +133,32 @@ static void kernel_panic(registers_t *r)
         __asm__ volatile ("hlt");
 }
 
-/* interrupts.s dagi isr_common shu funksiyani chaqiradi */
-void interrupt_handler(registers_t *r)
+/*
+ * interrupts.s dagi isr_common shu funksiyani chaqiradi.
+ * Qaytariladigan qiymat — qaysi stekdagi registrlarni tiklash kerak:
+ * odatda o'sha r, lekin scheduler boshqa vazifani tanlasa — uning registrlari.
+ */
+registers_t *interrupt_handler(registers_t *r)
 {
     if (r->int_no < 32) {
         kernel_panic(r);
-        return;
+        return r;
     }
 
-    int irq = r->int_no - 32;
-    if (irq_handlers[irq])
-        irq_handlers[irq](r);
+    if (r->int_no == YIELD_VECTOR)
+        return sched_yield_handler(r);
 
-    /* PIC ga "tugatdim" signalini yuboramiz, aks holda keyingi IRQ kelmaydi */
-    if (irq >= 8)
-        outb(PIC2_CMD, PIC_EOI);
-    outb(PIC1_CMD, PIC_EOI);
+    int irq = r->int_no - 32;
+    if (irq < 16) {
+        if (irq_handlers[irq])
+            irq_handlers[irq](r);
+
+        /* PIC ga "tugatdim" signalini yuboramiz, aks holda keyingi IRQ kelmaydi.
+           Bu vazifa almashtirishdan OLDIN bo'lishi shart. */
+        if (irq >= 8)
+            outb(PIC2_CMD, PIC_EOI);
+        outb(PIC1_CMD, PIC_EOI);
+    }
+
+    return sched_maybe_switch(r);
 }

@@ -326,6 +326,11 @@ static const command_t commands[] = {
     { "heap",      "Heap bloklari ro'yxati",                 cmd_heap      },
     { "memtest",   "Heap ni avtomatik sinash",               cmd_memtest   },
     { "translate", "Virtual -> fizik: translate 0xD0000000", cmd_translate },
+    /* Vazifalar (v0.3) */
+    { "ps",        "Vazifalar ro'yxati va CPU ulushi",       cmd_ps        },
+    { "spawn",     "Fon vazifasi: spawn spinner|primes|busy", cmd_spawn    },
+    { "kill",      "Vazifani to'xtatish: kill 3",            cmd_kill      },
+    { "sched",     "Scheduler statistikasi",                 cmd_sched     },
     /* Sinov va boshqaruv */
     { "crash",     "Exception sinovi (0 ga bo'lish)",        cmd_crash     },
     { "pagefault", "Page Fault sinovi (pagefault null)",     cmd_pagefault },

@@ -15,4 +15,8 @@ extern char kernel_end[];
 void shell_run(void);
 void status_bar_refresh(void);
 
+/* Status bardagi fon vazifalari uchun ajratilgan ustunlar: [16, 29) */
+#define STATUS_TASK_COL 16
+#define STATUS_TASK_END 29
+
 #endif

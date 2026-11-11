@@ -60,6 +60,8 @@ isr\n:
 .irp i, 32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47
     ISR_NOERR \i
 .endr
+# 0x81 (129): task_yield() — vazifa navbatni o'zi beradi (v0.3)
+ISR_NOERR 129
 
 # --- Umumiy ishlov beruvchi ---
 isr_common:
@@ -76,7 +78,10 @@ isr_common:
     push %esp                 # registers_t* sifatida C ga uzatiladi
     cld
     call interrupt_handler
-    add $4, %esp
+    # interrupt_handler qaysi vazifaning registrlarini tiklash kerakligini qaytaradi.
+    # Boshqa vazifa bo'lsa — stek ko'rsatkichi o'sha vazifa stekiga o'tadi:
+    # bu KONTEKST ALMASHTIRISH (v0.3).
+    mov %eax, %esp
     pop %gs
     pop %fs
     pop %es

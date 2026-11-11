@@ -11,6 +11,7 @@
 #include "drivers.h"
 #include "cpu.h"
 #include "io.h"
+#include "task.h"
 
 #define PIT_FREQUENCY 1193182
 #define PIT_CHANNEL0  0x40
@@ -26,6 +27,7 @@ static void timer_handler(registers_t *r)
     ticks++;
     if (ticks % frequency == 0 && second_callback)
         second_callback(ticks / frequency);
+    sched_tick();                   /* scheduler: CPU hisobi, uyg'otish, vaqt kvanti */
 }
 
 void timer_init(uint32_t hz)
@@ -52,7 +54,14 @@ uint32_t timer_seconds(void)
 
 void timer_sleep_ms(uint32_t ms)
 {
-    uint32_t target = ticks + (ms * frequency) / 1000;
+    uint32_t wait = (ms * frequency) / 1000;
+    if (wait == 0)
+        wait = 1;
+    if (sched_active()) {           /* v0.3: vazifa uxlaydi, protsessor boshqalarga beriladi */
+        task_sleep_ticks(wait);
+        return;
+    }
+    uint32_t target = ticks + wait;
     while (ticks < target)
         __asm__ volatile ("hlt");   /* keyingi uzilishgacha protsessorni dam oldiramiz */
 }

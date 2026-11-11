@@ -1,4 +1,4 @@
-# DiyorOS v0.2
+# DiyorOS v0.3
 
 C va Assembly'da noldan yozilgan kichik operatsion tizim. Arxitektura: x86, 32-bit protected mode.
 Linux, Windows yoki boshqa OS kodidan foydalanilmagan. Kompyuter yoqilgandan keyin ekranga chiqadigan
@@ -74,6 +74,7 @@ DiyorOS/
     │   └── interrupts.s  GDT/IDT yuklash, 48 ta uzilish "stub"i
     ├── kernel/
     │   ├── kernel.c      asosiy funksiya: hamma qismni tartib bilan ishga tushiradi
+    │   ├── task.c        vazifalar va scheduler (v0.3)
     │   ├── gdt.c         segmentlar jadvali (ring 0 / ring 3)
     │   └── idt.c         uzilishlar jadvali, PIC, kernel panic
     ├── drivers/
@@ -91,7 +92,8 @@ DiyorOS/
     │   └── kprintf.c     printf'ning kernel varianti
     └── shell/
         ├── shell.c       buyruqlar qatori
-        └── cmd_memory.c  xotira buyruqlari (mem, alloc, heap, memtest...)
+        ├── cmd_memory.c  xotira buyruqlari (mem, alloc, heap, memtest...)
+        └── cmd_process.c vazifa buyruqlari (ps, spawn, kill, sched)
 ```
 
 ---
@@ -149,7 +151,7 @@ keyingi uzilishgacha uxlaydi va 100% band bo'lmaydi.
 |---|---|---|
 | **v0.1** ✅ | boot, GDT, IDT, taymer, klaviatura, shell | Uzilishlar, drayverlar |
 | **v0.2** ✅ | Fizik xotira menejeri (bitmap), **paging**, `kmalloc`/`kfree` — [batafsil](docs/v0.2-xotira.md) | Xotirani boshqarish, virtual xotira |
-| v0.3 | **Multitasking**: jarayonlar, kontekst almashtirish, Round-Robin scheduler, `ps` buyrug'i | Jarayonlar, rejalashtirish |
+| **v0.3** ✅ | **Multitasking**: kontekst almashtirish, Round-Robin scheduler, `ps`, `kill`, `spawn` — [batafsil](docs/v0.3-jarayonlar.md) | Jarayonlar, rejalashtirish |
 | v0.4 | RAM'dagi fayl tizimi: `ls`, `cat`, `touch`, `mkdir` | Fayl tizimlari |
 | v0.5 | User mode (ring 3), **syscall**'lar, ELF dasturlarni yuklash | Himoya, tizim chaqiruvlari |
 | v0.6 | Disk drayveri (ATA), FAT12/FAT32 o'qish | Kiritish-chiqarish, disklar |

@@ -2,7 +2,7 @@
 #ifndef KPRINTF_H
 #define KPRINTF_H
 
-/* Qo'llab-quvvatlanadi: %d %u %x %s %c %% hamda kenglik: %02d, %8x */
+/* Qo'llab-quvvatlanadi: %d %u %x %s %c %% hamda kenglik: %02d, %8x, %-10s (chapga) */
 void kprintf(const char *fmt, ...);
 
 #endif

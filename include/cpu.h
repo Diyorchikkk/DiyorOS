@@ -18,4 +18,6 @@ void gdt_init(void);
 void idt_init(void);
 void irq_register(int irq, irq_handler_t handler);
 
+#define YIELD_VECTOR 0x81   /* task_yield() uzilishi */
+
 #endif

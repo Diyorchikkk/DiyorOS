@@ -15,6 +15,7 @@
 #include "drivers.h"
 #include "cpu.h"
 #include "io.h"
+#include "task.h"
 
 #define KBD_DATA_PORT 0x60
 #define BUFFER_SIZE   256
@@ -40,6 +41,8 @@ static const char keymap_shift[128] = {
 static volatile char buffer[BUFFER_SIZE];
 static volatile uint32_t head = 0, tail = 0;   /* head — yozish, tail — o'qish */
 
+static task_t *waiter = 0;       /* tugma kutib BLOCKED bo'lgan vazifa */
+
 static bool shift = false;
 static bool caps_lock = false;
 static bool extended = false;   /* 0xE0 prefiksi (strelkalar va h.k.) */
@@ -50,6 +53,10 @@ static void buffer_push(char c)
     if (next != tail) {          /* bufer to'lgan bo'lsa, belgini tashlaymiz */
         buffer[head] = c;
         head = next;
+    }
+    if (waiter) {                /* kutayotgan vazifani uyg'otamiz */
+        task_unblock(waiter);
+        waiter = 0;
     }
 }
 
@@ -110,11 +117,26 @@ void keyboard_inject(char c)
     buffer_push(c);
 }
 
+/*
+ * Tugma bosilguncha kutish.
+ * v0.3 dan: kutayotgan vazifa BLOCKED holatga o'tadi va protsessorni
+ * boshqa vazifalarga beradi. Tugma bosilganda uzilish uni uyg'otadi.
+ */
 char keyboard_getchar(void)
 {
-    while (head == tail)
-        __asm__ volatile ("hlt");    /* tugma bosilguncha uxlaymiz */
-    char c = buffer[tail];
-    tail = (tail + 1) % BUFFER_SIZE;
-    return c;
+    for (;;) {
+        __asm__ volatile ("cli");
+        if (head != tail) {
+            char c = buffer[tail];
+            tail = (tail + 1) % BUFFER_SIZE;
+            __asm__ volatile ("sti");
+            return c;
+        }
+        if (sched_active()) {
+            waiter = task_current();
+            task_block();
+        } else {
+            __asm__ volatile ("sti; hlt");
+        }
+    }
 }

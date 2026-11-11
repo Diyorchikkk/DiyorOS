@@ -18,6 +18,7 @@
 #include "cpu.h"
 #include "drivers.h"
 #include "memory.h"
+#include "task.h"
 
 uint32_t mem_lower_kb = 0;
 uint32_t mem_upper_kb = 0;
@@ -72,7 +73,13 @@ static void status_bar_update(uint32_t seconds)
     for (int j = 0; right[j]; j++)
         line[start + j] = right[j];
 
-    vga_write_at(0, 0, line, VGA_WHITE, VGA_BLUE);
+    /* 16-28 ustunlar fon vazifalari (spinner) uchun ajratilgan — ularga tegmaymiz */
+    char head[STATUS_TASK_COL + 1];
+    for (int j = 0; j < STATUS_TASK_COL; j++)
+        head[j] = line[j];
+    head[STATUS_TASK_COL] = 0;
+    vga_write_at(0, 0, head, VGA_WHITE, VGA_BLUE);
+    vga_write_at(STATUS_TASK_END, 0, line + STATUS_TASK_END, VGA_WHITE, VGA_BLUE);
 }
 
 void status_bar_refresh(void)
@@ -150,6 +157,9 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
 
     __asm__ volatile ("sti");    /* uzilishlarni yoqamiz — endi IRQ lar keladi */
     boot_ok("Uzilishlar yoqildi");
+
+    sched_init();                /* shu oqim "shell" vazifasiga aylanadi, idle yaratiladi */
+    boot_ok("Scheduler ishga tushdi (Round-Robin, kvant 50 ms)");
 
     print_banner();
     shell_run();                 /* bu funksiyadan hech qachon qaytilmaydi */

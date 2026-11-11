@@ -52,6 +52,11 @@ void kprintf(const char *fmt, ...)
 
         char pad = ' ';
         int width = 0;
+        int left = 0;               /* '-' — chapga tekislash (faqat %s uchun) */
+        if (*fmt == '-') {
+            left = 1;
+            fmt++;
+        }
         if (*fmt == '0') {
             pad = '0';
             fmt++;
@@ -66,7 +71,18 @@ void kprintf(const char *fmt, ...)
         case 'c': vga_putc((char)va_arg(ap, int)); break;
         case 's': {
             const char *s = va_arg(ap, const char *);
-            vga_puts(s ? s : "(null)");
+            if (!s)
+                s = "(null)";
+            int len = 0;
+            while (s[len])
+                len++;
+            if (!left)
+                for (int i = len; i < width; i++)
+                    vga_putc(' ');
+            vga_puts(s);
+            if (left)
+                for (int i = len; i < width; i++)
+                    vga_putc(' ');
             break;
         }
         case '%': vga_putc('%'); break;
