@@ -111,6 +111,19 @@ static void kernel_panic(registers_t *r)
     kprintf("  Error code: 0x%x   EIP: 0x%08x   CS: 0x%x   EFLAGS: 0x%x\n",
             r->err_code, r->eip, r->cs, r->eflags);
     kprintf("  EAX=%08x EBX=%08x ECX=%08x EDX=%08x\n", r->eax, r->ebx, r->ecx, r->edx);
+
+    if (r->int_no == 14) {
+        /* Page Fault: CR2 registrida xato bergan manzil saqlanadi */
+        uint32_t cr2;
+        __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
+        kprintf("  Sahifa xatosi manzili (CR2): 0x%08x\n", cr2);
+        kprintf("  Sabab: %s, %s, %s rejimida\n",
+                (r->err_code & 1) ? "ruxsat buzildi" : "sahifa xaritada yo'q",
+                (r->err_code & 2) ? "yozishda" : "o'qishda",
+                (r->err_code & 4) ? "foydalanuvchi" : "kernel");
+        if (cr2 < 0x1000)
+            kprintf("  (NULL pointer ishlatilgan bo'lishi mumkin)\n");
+    }
     kprintf("  Tizim to'xtatildi. Qayta yoqing.\n");
     __asm__ volatile ("cli");
     for (;;)

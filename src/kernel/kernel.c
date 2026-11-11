@@ -17,6 +17,7 @@
 #include "kprintf.h"
 #include "cpu.h"
 #include "drivers.h"
+#include "memory.h"
 
 uint32_t mem_lower_kb = 0;
 uint32_t mem_upper_kb = 0;
@@ -108,8 +109,10 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
         }
         boot_ok("Multiboot bootloader aniqlandi");
     } else {
-        vga_set_color(VGA_YELLOW, VGA_BLACK);
-        kprintf("  [WARN] Multiboot magic noto'g'ri: 0x%x\n", magic);
+        vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+        kprintf("  [XATO] Multiboot magic noto'g'ri: 0x%x. Xotira haqida ma'lumot yo'q.\n", magic);
+        for (;;)
+            __asm__ volatile ("cli; hlt");
     }
 
     gdt_init();
@@ -117,6 +120,21 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
 
     idt_init();
     boot_ok("IDT va PIC (uzilishlar) o'rnatildi");
+
+    /* Xotira: IDT dan keyin, chunki paging xatolari (Page Fault) ushlanishi kerak */
+    pmm_init(mbi);
+    kprintf("  [ ");
+    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+    kprintf("OK");
+    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+    kprintf(" ] Fizik xotira menejeri: %u MB, %u ta frame (4 KB)\n",
+            pmm_memory_top() / (1024 * 1024), pmm_total_frames());
+
+    paging_init();
+    boot_ok("Paging yoqildi (virtual xotira)");
+
+    heap_init();
+    boot_ok("Kernel heap tayyor (kmalloc / kfree)");
 
     timer_init(TIMER_HZ);
     timer_on_second(status_bar_update);
@@ -132,8 +150,6 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
 
     __asm__ volatile ("sti");    /* uzilishlarni yoqamiz — endi IRQ lar keladi */
     boot_ok("Uzilishlar yoqildi");
-
-    kprintf("  Xotira: %u MB\n", (mem_upper_kb / 1024) + 1);
 
     print_banner();
     shell_run();                 /* bu funksiyadan hech qachon qaytilmaydi */

@@ -14,6 +14,7 @@
 #include "drivers.h"
 #include "string.h"
 #include "io.h"
+#include "shell.h"
 
 #define LINE_MAX    128
 #define HISTORY_MAX 10
@@ -185,15 +186,16 @@ static void cmd_time(const char *args)
             t.year, t.month, t.day, t.hour, t.minute, t.second);
 }
 
-static void cmd_mem(const char *args)
+static void cmd_whoami(const char *args)
 {
     (void)args;
-    uint32_t kernel_size = (uint32_t)(kernel_end - kernel_start);
-    kprintf("Past xotira (0-640 KB): %u KB\n", mem_lower_kb);
-    kprintf("Yuqori xotira (1 MB+):   %u KB\n", mem_upper_kb);
-    kprintf("Jami RAM:                ~%u MB\n", mem_upper_kb / 1024 + 1);
-    kprintf("Kernel joylashuvi:       0x%x - 0x%x (%u KB)\n",
-            (uint32_t)kernel_start, (uint32_t)kernel_end, kernel_size / 1024);
+    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    kprintf("Mamasoliyev Diyorbek Abdujalil o'g'li\n");
+    normal();
+    kprintf("  Universitet:  TATU (Toshkent axborot texnologiyalari universiteti)\n");
+    kprintf("  Fakultet:     Dasturiy injiniring, 3-kurs\n");
+    kprintf("  Guruh:        SRM002-2\n");
+    kprintf("  GitHub:       github.com/Diyorchikkk\n");
 }
 
 static void cmd_calc(const char *args)
@@ -304,20 +306,31 @@ typedef struct {
 } command_t;
 
 static const command_t commands[] = {
-    { "help",     "Buyruqlar ro'yxati",                   cmd_help     },
-    { "clear",    "Ekranni tozalash",                     cmd_clear    },
-    { "echo",     "Matnni chiqarish: echo salom",         cmd_echo     },
-    { "about",    "OS haqida ma'lumot",                   cmd_about    },
-    { "uptime",   "Tizim qancha vaqtdan beri ishlayapti", cmd_uptime   },
-    { "time",     "Sana va vaqt (CMOS soati)",            cmd_time     },
-    { "mem",      "Xotira haqida ma'lumot",               cmd_mem      },
-    { "calc",     "Kalkulyator: calc 12 * 7",             cmd_calc     },
-    { "color",    "Matn rangini o'zgartirish: color 14",  cmd_color    },
-    { "history",  "Kiritilgan buyruqlar tarixi",          cmd_history  },
-    { "sleep",    "N soniya kutish: sleep 3",             cmd_sleep    },
-    { "crash",    "Exception sinovi (0 ga bo'lish)",      cmd_crash    },
-    { "reboot",   "Qayta yuklash",                        cmd_reboot   },
-    { "shutdown", "O'chirish",                            cmd_shutdown },
+    /* Umumiy */
+    { "help",      "Buyruqlar ro'yxati",                     cmd_help      },
+    { "clear",     "Ekranni tozalash",                       cmd_clear     },
+    { "echo",      "Matnni chiqarish: echo salom",           cmd_echo      },
+    { "about",     "OS haqida ma'lumot",                     cmd_about     },
+    { "whoami",    "Muallif haqida",                         cmd_whoami    },
+    { "uptime",    "Tizim qancha vaqtdan beri ishlayapti",   cmd_uptime    },
+    { "time",      "Sana va vaqt (CMOS soati)",              cmd_time      },
+    { "calc",      "Kalkulyator: calc 12 * 7",               cmd_calc      },
+    { "color",     "Matn rangini o'zgartirish: color 14",    cmd_color     },
+    { "history",   "Kiritilgan buyruqlar tarixi",            cmd_history   },
+    { "sleep",     "N soniya kutish: sleep 3",               cmd_sleep     },
+    /* Xotira (v0.2) */
+    { "mem",       "Xotira holati: RAM, paging, heap",       cmd_mem       },
+    { "memmap",    "BIOS xotira xaritasi",                   cmd_memmap    },
+    { "alloc",     "Heap dan xotira olish: alloc 100",       cmd_alloc     },
+    { "free",      "Xotirani qaytarish: free 0xD0000018",    cmd_free      },
+    { "heap",      "Heap bloklari ro'yxati",                 cmd_heap      },
+    { "memtest",   "Heap ni avtomatik sinash",               cmd_memtest   },
+    { "translate", "Virtual -> fizik: translate 0xD0000000", cmd_translate },
+    /* Sinov va boshqaruv */
+    { "crash",     "Exception sinovi (0 ga bo'lish)",        cmd_crash     },
+    { "pagefault", "Page Fault sinovi (pagefault null)",     cmd_pagefault },
+    { "reboot",    "Qayta yuklash",                          cmd_reboot    },
+    { "shutdown",  "O'chirish",                              cmd_shutdown  },
 };
 #define COMMAND_COUNT (sizeof(commands) / sizeof(commands[0]))
 
@@ -328,7 +341,7 @@ static void cmd_help(const char *args)
     for (unsigned i = 0; i < COMMAND_COUNT; i++) {
         vga_set_color(VGA_YELLOW, VGA_BLACK);
         kprintf("  %s", commands[i].name);
-        for (int pad = strlen(commands[i].name); pad < 10; pad++)
+        for (int pad = strlen(commands[i].name); pad < 11; pad++)
             vga_putc(' ');
         normal();
         kprintf("%s\n", commands[i].description);

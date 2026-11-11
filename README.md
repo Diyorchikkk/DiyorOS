@@ -1,4 +1,4 @@
-# DiyorOS v0.1
+# DiyorOS v0.2
 
 C va Assembly'da noldan yozilgan kichik operatsion tizim. Arxitektura: x86, 32-bit protected mode.
 Linux, Windows yoki boshqa OS kodidan foydalanilmagan. Kompyuter yoqilgandan keyin ekranga chiqadigan
@@ -82,11 +82,16 @@ DiyorOS/
     │   ├── keyboard.c    PS/2 klaviatura, IRQ1, ring buffer
     │   ├── mouse.c       PS/2 sichqoncha g'ildiragi, IRQ12
     │   └── rtc.c         CMOS real vaqt soati
+    ├── mm/               xotira (v0.2) — batafsil: docs/v0.2-xotira.md
+    │   ├── pmm.c         fizik xotira menejeri (bitmap)
+    │   ├── paging.c      virtual xotira, page directory/table
+    │   └── kheap.c       kmalloc / kfree
     ├── lib/
     │   ├── string.c      memset, memcpy, strcmp... (libc yo'q)
     │   └── kprintf.c     printf'ning kernel varianti
     └── shell/
-        └── shell.c       buyruqlar qatori
+        ├── shell.c       buyruqlar qatori
+        └── cmd_memory.c  xotira buyruqlari (mem, alloc, heap, memtest...)
 ```
 
 ---
@@ -143,7 +148,7 @@ keyingi uzilishgacha uxlaydi va 100% band bo'lmaydi.
 | Bosqich | Nima qo'shiladi | OS nazariyasidagi mavzu |
 |---|---|---|
 | **v0.1** ✅ | boot, GDT, IDT, taymer, klaviatura, shell | Uzilishlar, drayverlar |
-| v0.2 | Fizik xotira menejeri (bitmap), **paging**, `kmalloc`/`kfree` | Xotirani boshqarish, virtual xotira |
+| **v0.2** ✅ | Fizik xotira menejeri (bitmap), **paging**, `kmalloc`/`kfree` — [batafsil](docs/v0.2-xotira.md) | Xotirani boshqarish, virtual xotira |
 | v0.3 | **Multitasking**: jarayonlar, kontekst almashtirish, Round-Robin scheduler, `ps` buyrug'i | Jarayonlar, rejalashtirish |
 | v0.4 | RAM'dagi fayl tizimi: `ls`, `cat`, `touch`, `mkdir` | Fayl tizimlari |
 | v0.5 | User mode (ring 3), **syscall**'lar, ELF dasturlarni yuklash | Himoya, tizim chaqiruvlari |
