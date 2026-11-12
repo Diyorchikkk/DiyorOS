@@ -192,7 +192,7 @@ void cmd_ps(const char *args)
     uint8_t old = vga_get_color();
 
     vga_set_color(VGA_WHITE, VGA_BLACK);
-    kprintf("PID  %-10s%-12s CPU%%   TICK  ALMASH  IZOH\n", "NOMI", "HOLAT");
+    kprintf("PID  T  %-10s%-12s CPU%%  XOTIRA  ALMASH  IZOH\n", "NOMI", "HOLAT");
     vga_set_color(old & 0x0F, old >> 4);
 
     int count = 0;
@@ -201,13 +201,22 @@ void cmd_ps(const char *args)
         if (t->state == TASK_UNUSED)
             continue;
         count++;
-        kprintf("%3u  %-10s", t->pid, t->name);
+        kprintf("%3u  %c  %-10s", t->pid, t->user ? 'U' : 'K', t->name);
         vga_set_color(state_color(t->state), VGA_BLACK);
         kprintf("%-12s", state_name(t->state));
         vga_set_color(old & 0x0F, old >> 4);
-        kprintf("%4u%% %6u %7u  %s\n", t->cpu_percent, t->cpu_ticks, t->switches, t->note);
+        uint32_t kb = (t->stack ? TASK_STACK_SIZE / 1024 : 16) + t->user_pages * 4;
+        const char *note = t->note;
+        char buf[TASK_NOTE_LEN];
+        if (t->user && t->state == TASK_ZOMBIE) {
+            ksnprintf(buf, sizeof(buf), "chiqish kodi %d", t->exit_code);
+            note = buf;
+        } else if (t->user && !note[0]) {
+            note = "user dastur (ring 3)";
+        }
+        kprintf("%4u%% %5u KB %7u  %s\n", t->cpu_percent, kb, t->switches, note);
     }
-    kprintf("Jami: %d ta vazifa (maksimum %d)\n", count, MAX_TASKS);
+    kprintf("Jami: %d ta vazifa (maksimum %d).  T: K - kernel oqimi, U - user dastur\n", count, MAX_TASKS);
 }
 
 void cmd_spawn(const char *args)

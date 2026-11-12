@@ -1,9 +1,12 @@
 /*
  * task.h — ko'p vazifalilik (multitasking): vazifalar va scheduler.
  *
- * Bu bosqichdagi "vazifa" (task) — kernel oqimi (kernel thread):
- * har birining o'z steki va registrlari bor, lekin xotira umumiy
- * (bitta manzil maydoni). Alohida xotirali haqiqiy jarayonlar — v0.5 da.
+ * Ikki xil vazifa bor:
+ *   - kernel oqimi (v0.3): ring 0 da ishlaydi, xotira kernel bilan umumiy
+ *     (shell, idle, spinner, primes, busy);
+ *   - user jarayon (v0.5): ring 3 da ishlaydi, o'z Page Directory si
+ *     (alohida xotirasi) bor, kernelga faqat syscall orqali murojaat qiladi
+ *     (/bin dagi dasturlar).
  */
 #ifndef TASK_H
 #define TASK_H
@@ -43,7 +46,21 @@ typedef struct {
     uint32_t     cpu_percent;   /* oxirgi soniyadagi protsessor ulushi */
     uint32_t     switches;      /* necha marta protsessorga chiqarilgan */
     char         note[TASK_NOTE_LEN];   /* vazifa o'zi yozadigan qisqa holat */
+
+    /* v0.5: user jarayonlar */
+    bool         user;          /* true — ring 3 dagi dastur */
+    uint32_t    *page_dir;      /* o'z Page Directory si (kernel oqimlari uchun 0) */
+    uint32_t     brk_start;     /* dastur heap i (sbrk) boshlanishi */
+    uint32_t     brk;           /* heap ning joriy oxiri */
+    uint32_t     user_pages;    /* jarayon egallagan sahifalar soni */
+    uint32_t     parent_pid;
+    uint32_t     wait_pid;      /* qaysi jarayon tugashini kutyapti */
+    int32_t      exit_code;
 } task_t;
+
+#define EXIT_KILLED   (-9)      /* kill buyrug'i bilan */
+#define EXIT_CTRL_C   (-2)      /* Ctrl+C bilan */
+#define EXIT_FAULT    (-11)     /* xato (Segmentation fault) */
 
 /* Ishga tushirish: joriy oqim (shell) 1-vazifaga aylanadi, idle yaratiladi */
 void     sched_init(void);
@@ -52,8 +69,19 @@ bool     sched_active(void);
 /* Vazifa yaratish. PID qaytaradi, 0 — joy yoki xotira yetmadi */
 uint32_t task_create(const char *name, task_entry_t entry, uint32_t arg);
 bool     task_kill(uint32_t pid);          /* false — bunday vazifa yo'q yoki o'ldirib bo'lmaydi */
-void     task_exit(void);                  /* joriy vazifani tugatish */
+void     task_exit(void);                  /* joriy vazifani tugatish (kod 0) */
+void     task_exit_code(int32_t code);
+
+/* v0.5: user jarayonlar */
+uint32_t task_create_user(const char *name, uint32_t *page_dir, uint32_t entry,
+                          uint32_t user_esp, uint32_t brk, uint32_t pages);
+int32_t  task_wait(uint32_t pid);          /* jarayon tugashini kutish, chiqish kodini qaytaradi */
+void     task_signal_kill(uint32_t pid, int32_t code);   /* uzilish ichidan ham (Ctrl+C) */
+task_t  *task_find(uint32_t pid);
+void     task_set_foreground(uint32_t pid);
+uint32_t task_foreground(void);
 void     task_reap(void);                  /* tugagan vazifalar xotirasini bo'shatish */
+void     task_reap_pid(uint32_t pid);
 
 void     task_yield(void);                 /* navbatni ixtiyoriy ravishda boshqaga berish */
 void     task_sleep_ticks(uint32_t ticks);

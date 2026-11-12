@@ -17,6 +17,7 @@
 #include "vga.h"
 #include "io.h"
 #include "string.h"
+#include "irq.h"
 
 #define TEXT_TOP   1                        /* 0-qator — status bar */
 #define TEXT_ROWS  (VGA_HEIGHT - TEXT_TOP)  /* matn uchun 24 qator */
@@ -173,7 +174,18 @@ void vga_clear(void)
     update_hw_cursor();
 }
 
+static void vga_putc_locked(char c);
+
+/* Bir nechta vazifa (shell va dasturlar) ekranga yozadi: kursor buzilmasligi uchun
+   har bir belgi uzilishlarsiz chiqariladi */
 void vga_putc(char c)
+{
+    uint32_t f = irq_save();
+    vga_putc_locked(c);
+    irq_restore(f);
+}
+
+static void vga_putc_locked(char c)
 {
     snap_to_live();
 

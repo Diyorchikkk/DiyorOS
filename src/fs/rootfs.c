@@ -4,7 +4,7 @@
  * ramfs bo'sh holda yaratiladi, shuning uchun har yuklanishda standart
  * papkalar va bir nechta fayl yaratamiz (Linux dagi tuzilishga o'xshash):
  *
- *   /bin            dasturlar (v0.5 da)
+ *   /bin            dasturlar (v0.5: kernel ichidagi initrd dan nusxalanadi)
  *   /etc            sozlamalar: motd, os-release
  *   /home/diyorbek  foydalanuvchi papkasi (shell shu yerda boshlanadi)
  *   /proc           procfs ulanadi
@@ -14,6 +14,7 @@
 #include "string.h"
 #include "kprintf.h"
 #include "config.h"
+#include "process.h"
 
 static void write_file(const char *path, const char *text)
 {
@@ -36,6 +37,7 @@ void rootfs_init(void)
     vfs_mkdir("/tmp");
 
     vfs_mount("/proc", procfs_create_root());
+    initrd_install("/bin");
 
     char buf[256];
     ksnprintf(buf, sizeof(buf),
@@ -49,7 +51,8 @@ void rootfs_init(void)
 
     write_file("/home/diyorbek/salom.txt",
                "Salom! Bu DiyorOS dagi birinchi fayl.\n"
-               "Uni tahrirlash uchun: edit salom.txt\n");
+               "Uni tahrirlash uchun: edit salom.txt\n"
+               "Dasturlar: ls /bin, keyin nomini yozing (masalan: hello)\n");
 
     write_file("/home/diyorbek/rejalar.txt",
                "DiyorOS rejasi\n"
@@ -58,7 +61,7 @@ void rootfs_init(void)
                "v0.2  xotira: PMM, paging, kmalloc/kfree           [tayyor]\n"
                "v0.3  multitasking: scheduler, ps, kill            [tayyor]\n"
                "v0.4  fayl tizimi: VFS, ramfs, procfs, muharrir    [tayyor]\n"
-               "v0.5  user mode, syscall, ELF dasturlar\n"
+               "v0.5  user mode, syscall, ELF dasturlar            [tayyor]\n"
                "v0.6  disk drayveri, FAT32\n"
                "v0.7  grafika\n"
                "v0.8  sinxronizatsiya: mutex, semafor, pipe\n"

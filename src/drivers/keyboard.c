@@ -16,6 +16,7 @@
 #include "cpu.h"
 #include "io.h"
 #include "task.h"
+#include "irq.h"
 
 #define KBD_DATA_PORT 0x60
 #define BUFFER_SIZE   256
@@ -44,6 +45,7 @@ static volatile uint32_t head = 0, tail = 0;   /* head — yozish, tail — o'qi
 static task_t *waiter = 0;       /* tugma kutib BLOCKED bo'lgan vazifa */
 
 static bool shift = false;
+static bool ctrl = false;
 static bool caps_lock = false;
 static bool extended = false;   /* 0xE0 prefiksi (strelkalar va h.k.) */
 
@@ -75,6 +77,10 @@ static void keyboard_handler(registers_t *r)
 
     if (extended) {
         extended = false;
+        if (sc == 0x1D) {                  /* o'ng Ctrl */
+            ctrl = !released;
+            return;
+        }
         if (released)
             return;
         if (sc == 0x48) buffer_push(shift ? KEY_SCROLL_UP : KEY_UP);
@@ -94,10 +100,23 @@ static void keyboard_handler(registers_t *r)
         shift = !released;
         return;
     }
+    if (sc == 0x1D) {                      /* Ctrl */
+        ctrl = !released;
+        return;
+    }
     if (released)
         return;
     if (sc == 0x3A) {                      /* Caps Lock */
         caps_lock = !caps_lock;
+        return;
+    }
+
+    if (ctrl && sc == 0x2E) {              /* Ctrl+C */
+        uint32_t fg = task_foreground();
+        if (fg)
+            task_signal_kill(fg, EXIT_CTRL_C);   /* oldingi plandagi dasturni to'xtatish */
+        else
+            buffer_push(KEY_CTRL_C);             /* shell: kiritilayotgan qatorni bekor qilish */
         return;
     }
 
@@ -129,12 +148,13 @@ void keyboard_inject(char c)
  */
 char keyboard_getchar(void)
 {
+    uint32_t flags = irq_save();
     for (;;) {
         __asm__ volatile ("cli");
         if (head != tail) {
             char c = buffer[tail];
             tail = (tail + 1) % BUFFER_SIZE;
-            __asm__ volatile ("sti");
+            irq_restore(flags);          /* avvalgi holatga (syscall ichida — o'chiq qoladi) */
             return c;
         }
         if (sched_active()) {
@@ -144,4 +164,10 @@ char keyboard_getchar(void)
             __asm__ volatile ("sti; hlt");
         }
     }
+}
+
+void keyboard_cancel_waiter(void *task)
+{
+    if (waiter == task)
+        waiter = 0;
 }

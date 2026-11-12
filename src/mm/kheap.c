@@ -24,6 +24,7 @@
 #include "kprintf.h"
 #include "string.h"
 #include "vga.h"
+#include "irq.h"
 
 #define BLOCK_MAGIC 0xD1B0B10Cu   /* sarlavha buzilmaganini tekshirish uchun belgi */
 #define ALIGNMENT   8
@@ -127,7 +128,18 @@ static void merge_with_next(block_t *b)
     n->magic = 0;
 }
 
+static void *kmalloc_locked(size_t size);
+
+/* v0.5: heap ni bir nechta vazifa ishlatadi — har bir chaqiruv uzilishlarsiz bajariladi */
 void *kmalloc(size_t size)
+{
+    uint32_t f = irq_save();
+    void *p = kmalloc_locked(size);
+    irq_restore(f);
+    return p;
+}
+
+static void *kmalloc_locked(size_t size)
 {
     if (size == 0)
         return 0;
@@ -170,7 +182,16 @@ void *kmalloc(size_t size)
     return block_data(b);
 }
 
+static void kfree_locked(void *ptr);
+
 void kfree(void *ptr)
+{
+    uint32_t f = irq_save();
+    kfree_locked(ptr);
+    irq_restore(f);
+}
+
+static void kfree_locked(void *ptr)
 {
     if (!ptr)
         return;

@@ -21,6 +21,7 @@
 #include "vga.h"
 #include "kprintf.h"
 #include "task.h"
+#include "process.h"
 
 #define PIC1_CMD  0x20
 #define PIC1_DATA 0x21
@@ -47,6 +48,7 @@ static irq_handler_t    irq_handlers[16];
 
 extern uint32_t isr_stub_table[48];   /* interrupts.s da */
 extern void idt_load(uint32_t);
+extern void isr128(void);          /* syscall stub */
 extern void isr129(void);          /* task_yield stub */
 
 static const char *exception_names[32] = {
@@ -94,6 +96,9 @@ void idt_init(void)
     for (int i = 0; i < 48; i++)
         idt_set(i, isr_stub_table[i], 0x08, 0x8E);
     idt_set(YIELD_VECTOR, (uint32_t)isr129, 0x08, 0x8E);
+    /* 0xEE: DPL = 3 — ring 3 dagi dastur ham "int 0x80" ni chaqira oladi.
+       Boshqa barcha uzilishlarni (0x8E, DPL = 0) dastur chaqirsa — General Protection Fault */
+    idt_set(SYSCALL_VECTOR, (uint32_t)isr128, 0x08, 0xEE);
 
     pic_remap();
     idt_load((uint32_t)&idt_pointer);
@@ -141,8 +146,15 @@ static void kernel_panic(registers_t *r)
 registers_t *interrupt_handler(registers_t *r)
 {
     if (r->int_no < 32) {
-        kernel_panic(r);
+        if ((r->cs & 3) == 3)                  /* xato dasturda (ring 3) — faqat u o'ladi */
+            process_fault(r, exception_names[r->int_no]);
+        kernel_panic(r);                       /* xato kernelning o'zida — tizim to'xtaydi */
         return r;
+    }
+
+    if (r->int_no == SYSCALL_VECTOR) {
+        syscall_handler(r);
+        return sched_maybe_switch(r);
     }
 
     if (r->int_no == YIELD_VECTOR)

@@ -45,6 +45,21 @@ bool     paging_translate(uint32_t virt, uint32_t *phys);
 uint32_t paging_identity_limit(void);
 uint32_t paging_directory_address(void);
 
+/* v0.5: har bir jarayonning o'z Page Directory si */
+#define USER_BASE       0x40000000u   /* dasturlar shu manzildan yuklanadi */
+#define USER_TOP        0xC0000000u   /* user hududining oxiri */
+#define USER_STACK_TOP  0xC0000000u
+#define USER_STACK_SIZE (64 * 1024)
+
+uint32_t *paging_kernel_directory(void);
+uint32_t *paging_current_directory(void);
+uint32_t *paging_create_directory(void);
+void      paging_free_directory(uint32_t *dir);
+void      paging_switch(uint32_t *dir);
+bool      paging_map_in(uint32_t *dir, uint32_t virt, uint32_t phys, uint32_t flags);
+bool      paging_translate_in(uint32_t *dir, uint32_t virt, uint32_t *phys, uint32_t *flags);
+bool      paging_check_range(uint32_t *dir, uint32_t virt, uint32_t len, uint32_t need_flags);
+
 /* ------------------------------ Heap ----------------------------- */
 #define HEAP_START 0xD0000000u
 #define HEAP_MAX   0xE0000000u   /* heap 256 MB dan oshmaydi */

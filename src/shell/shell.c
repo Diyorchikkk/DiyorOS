@@ -16,6 +16,8 @@
 #include "io.h"
 #include "shell.h"
 #include "vfs.h"
+#include "task.h"
+#include "process.h"
 
 #define LINE_MAX    256
 #define HISTORY_MAX 10
@@ -148,6 +150,14 @@ static void read_line(char *buf)
                 len = strlen(buf);
                 vga_puts(buf);
             }
+            continue;
+        }
+        if (c == KEY_CTRL_C) {          /* Ctrl+C: qatorni bekor qilish */
+            kprintf("^C\n");
+            len = 0;
+            buf[0] = 0;
+            hpos = history_count;
+            prompt();
             continue;
         }
         if (c == '\t') {
@@ -386,6 +396,14 @@ static void cmd_help(const char *args)
 {
     args = skip_spaces(args);
     if (*args) {                                /* help <buyruq> */
+        char bin[VFS_PATH_MAX];
+        vfs_node_t *prog;
+        ksnprintf(bin, sizeof(bin), "/bin/%s", args);
+        if (vfs_lookup(bin, &prog) == VFS_OK) {
+            kprintf("%s - %s dagi dastur (ring 3 da, o'z xotirasida ishlaydi), %u bayt\n",
+                    args, bin, prog->size);
+            return;
+        }
         for (unsigned i = 0; i < COMMAND_COUNT; i++)
             if (strcmp(args, commands[i].name) == 0) {
                 vga_set_color(VGA_YELLOW, VGA_BLACK);
@@ -417,6 +435,15 @@ static void cmd_help(const char *args)
         kprintf("\n");
     }
     normal();
+    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    kprintf("Dasturlar (/bin, v0.5):\n ");
+    vga_set_color(VGA_YELLOW, VGA_BLACK);
+    vfs_node_t *bin, *c;
+    if (vfs_lookup("/bin", &bin) == VFS_OK)
+        for (uint32_t i = 0; (c = vfs_readdir(bin, i)); i++)
+            kprintf(" %s", c->name);
+    normal();
+    kprintf("  (fonda: nom &, to'xtatish: Ctrl+C)\n");
     kprintf("Batafsil: help <buyruq>.  Tab - to'ldirish, strelkalar - tarix,\n");
     kprintf("sichqoncha g'ildiragi / Fn+strelka - ekranni varaqlash.\n");
 }
@@ -525,6 +552,87 @@ static void tab_complete(char *buf, int *len)
     buf[*len] = 0;
 }
 
+/* ------------------------- Dasturlarni ishga tushirish ------------------------- */
+
+/*
+ * "hello abc"     -> /bin/hello ni ishga tushirib, tugashini kutish
+ * "primes 1000 &" -> fonda ishga tushirish, shell darhol bo'shaydi
+ * "/tmp/dastur"   -> to'liq yo'l bilan
+ */
+static bool run_program(const char *cmd, char *args)
+{
+    char path[VFS_PATH_MAX];
+    bool has_slash = false;
+    for (const char *p = cmd; *p; p++)
+        if (*p == '/')
+            has_slash = true;
+    if (has_slash)
+        strncpy(path, cmd, sizeof(path) - 1);
+    else
+        ksnprintf(path, sizeof(path), "/bin/%s", cmd);
+    path[sizeof(path) - 1] = 0;
+
+    vfs_node_t *n;
+    if (vfs_lookup(path, &n) != VFS_OK || n->type != VFS_FILE)
+        return false;
+
+    /* Oxirida "&" bo'lsa — fonda */
+    bool background = false;
+    int len = strlen(args);
+    while (len > 0 && args[len - 1] == ' ')
+        args[--len] = 0;
+    if (len > 0 && args[len - 1] == '&') {
+        background = true;
+        args[--len] = 0;
+        while (len > 0 && args[len - 1] == ' ')
+            args[--len] = 0;
+    }
+
+    task_reap();
+    int32_t pid = process_spawn(path, args);
+    if (pid < 0) {
+        vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+        kprintf("%s: %s\n", cmd, process_strerror(pid));
+        normal();
+        return true;
+    }
+
+    if (background) {
+        kprintf("[PID %d] %s fonda ishga tushdi\n", pid, cmd);
+        return true;
+    }
+
+    /* Oldingi plan: shell dastur tugashini kutadi (BLOCKED). Ctrl+C uni to'xtatadi */
+    task_set_foreground((uint32_t)pid);
+    int32_t code = task_wait((uint32_t)pid);
+    task_set_foreground(0);
+    task_reap_pid((uint32_t)pid);
+    normal();
+
+    if (code == EXIT_CTRL_C) {
+        kprintf("^C\n");
+    } else if (code != 0 && code != EXIT_FAULT) {
+        vga_set_color(VGA_DARK_GREY, VGA_BLACK);
+        kprintf("[%s %d kodi bilan tugadi]\n", cmd, code);
+        normal();
+    }
+    return true;
+}
+
+/* Fonda ishlagan dasturlar tugagan bo'lsa — xabar berib, xotirasini bo'shatish */
+static void report_finished(void)
+{
+    for (int i = 0; i < MAX_TASKS; i++) {
+        task_t *t = task_get(i);
+        if (t->state != TASK_ZOMBIE || !t->user || t->pid == task_foreground())
+            continue;
+        vga_set_color(VGA_DARK_GREY, VGA_BLACK);
+        kprintf("[PID %u] %s tugadi (kod %d)\n", t->pid, t->name, t->exit_code);
+        normal();
+        task_reap_pid(t->pid);
+    }
+}
+
 /* Qatorni buyruq nomi va argumentlarga ajratib, mos funksiyani chaqirish */
 static void execute(char *line)
 {
@@ -546,6 +654,9 @@ static void execute(char *line)
             return;
         }
     }
+
+    if (run_program(cmd, args))      /* ichki buyruq emas — /bin dagi dasturmi? */
+        return;
 
     vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
     kprintf("Noma'lum buyruq: %s", cmd);
@@ -571,6 +682,7 @@ void shell_run(void)
     kprintf("Buyruqlar ro'yxati uchun 'help' ni yozing.\n\n");
 
     for (;;) {
+        report_finished();
         prompt();
         read_line(line);
         history_add(line);

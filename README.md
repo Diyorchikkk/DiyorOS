@@ -1,4 +1,4 @@
-# DiyorOS v0.4
+# DiyorOS v0.5
 
 C va Assembly'da noldan yozilgan kichik operatsion tizim. Arxitektura: x86, 32-bit protected mode.
 Linux, Windows yoki boshqa OS kodidan foydalanilmagan. Kompyuter yoqilgandan keyin ekranga chiqadigan
@@ -75,6 +75,8 @@ DiyorOS/
     ├── kernel/
     │   ├── kernel.c      asosiy funksiya: hamma qismni tartib bilan ishga tushiradi
     │   ├── task.c        vazifalar va scheduler (v0.3)
+    │   ├── process.c     ELF yuklovchi, dastur xatolarini ushlash (v0.5)
+    │   ├── syscall.c     tizim chaqiruvlari, int 0x80 (v0.5)
     │   ├── gdt.c         segmentlar jadvali (ring 0 / ring 3)
     │   └── idt.c         uzilishlar jadvali, PIC, kernel panic
     ├── drivers/
@@ -101,6 +103,12 @@ DiyorOS/
         ├── cmd_process.c vazifa buyruqlari (ps, spawn, kill, sched)
         ├── cmd_fs.c      fayl buyruqlari (ls, cd, cat, cp, mv, rm, tree...)
         └── editor.c      matn muharriri (edit)
+user/                     dasturlar (v0.5) — ring 3 da ishlaydi, /bin ga tushadi
+    ├── crt0.s            dastur boshlanishi: main(argc, argv)
+    ├── libc.c            printf, malloc, readline, syscall o'ramlari
+    ├── linker.ld         dasturlar 0x40000000 dan joylashadi
+    ├── initrd.s          dasturlarni kernel ichiga joylash
+    └── hello.c guess.c primes.c hack.c isolate.c kundalik.c
 ```
 
 ---
@@ -160,7 +168,7 @@ keyingi uzilishgacha uxlaydi va 100% band bo'lmaydi.
 | **v0.2** ✅ | Fizik xotira menejeri (bitmap), **paging**, `kmalloc`/`kfree` — [batafsil](docs/v0.2-xotira.md) | Xotirani boshqarish, virtual xotira |
 | **v0.3** ✅ | **Multitasking**: kontekst almashtirish, Round-Robin scheduler, `ps`, `kill`, `spawn` — [batafsil](docs/v0.3-jarayonlar.md) | Jarayonlar, rejalashtirish |
 | **v0.4** ✅ | VFS, ramfs, procfs (`/proc`), fayl buyruqlari, matn muharriri, Tab — [batafsil](docs/v0.4-fayl-tizimi.md) | Fayl tizimlari |
-| v0.5 | User mode (ring 3), **syscall**'lar, ELF dasturlarni yuklash | Himoya, tizim chaqiruvlari |
+| **v0.5** ✅ | User mode (ring 3), TSS, alohida xotira, syscall (`int 0x80`), ELF yuklovchi, libc, 6 ta dastur, Ctrl+C — [batafsil](docs/v0.5-user-mode.md) | Himoya, tizim chaqiruvlari |
 | v0.6 | Disk drayveri (ATA), FAT12/FAT32 o'qish | Kiritish-chiqarish, disklar |
 | Diplom | Semaforlar/mutex, oddiy grafik rejim, tarmoq yoki ARM64'ga port qilish | Sinxronizatsiya va boshqalar |
 

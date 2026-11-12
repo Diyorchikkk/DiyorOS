@@ -91,6 +91,7 @@ typedef struct {
     vfs_node_t *node;        /* 0 — bo'sh */
     uint32_t    offset;      /* joriy o'qish/yozish joyi */
     uint32_t    flags;
+    uint32_t    owner;       /* qaysi jarayon ochgan (PID) — boshqasi ishlata olmaydi */
 } vfs_fd_t;
 
 /* Ishga tushirish */
@@ -121,6 +122,8 @@ int32_t     vfs_write(int fd, const void *buf, uint32_t len);
 int         vfs_seek(int fd, uint32_t offset);
 int         vfs_close(int fd);
 const vfs_fd_t *vfs_fd_info(int fd);
+bool        vfs_fd_owned(int fd, uint32_t pid);
+void        vfs_close_owner(uint32_t pid);   /* jarayon tugaganda uning fayllarini yopish */
 
 const char *vfs_strerror(int err);
 

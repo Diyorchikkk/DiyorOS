@@ -6,6 +6,9 @@
 #  make iso    — yuklanadigan ISO (GRUB kerak, ixtiyoriy)
 #  make clean  — build papkasini tozalash
 #
+#  v0.5: user/ dagi dasturlar alohida yig'iladi (0x40000000 manzilga, ring 3
+#  uchun) va user/initrd.s orqali kernel ichiga joylanadi -> /bin.
+#
 #  Mac da i686-elf-gcc (cross-compiler) ishlatiladi.
 #  Linux da oddiy gcc -m32 bilan ham ishlaydi.
 # =====================================================================
@@ -37,9 +40,20 @@ LDFLAGS  := $(ARCH_LD) -T linker.ld -ffreestanding -nostdlib -O2
 C_SRC    := $(wildcard src/*/*.c)
 ASM_SRC  := $(wildcard src/*/*.s)
 OBJS     := $(patsubst src/%.s,$(BUILD)/%.o,$(ASM_SRC)) \
-            $(patsubst src/%.c,$(BUILD)/%.o,$(C_SRC))
+            $(patsubst src/%.c,$(BUILD)/%.o,$(C_SRC)) \
+            $(BUILD)/initrd.o
+
+# ---- User dasturlar (v0.5) ----
+USER_PROGS   := hello guess primes hack isolate kundalik
+USER_BINS    := $(addprefix $(BUILD)/user/,$(USER_PROGS))
+USER_LIB     := $(BUILD)/user/crt0.o $(BUILD)/user/libc.o
+USER_CFLAGS  := $(ARCH_C) -std=gnu99 -ffreestanding -O2 -Wall -Wextra \
+                -fno-stack-protector -fno-asynchronous-unwind-tables \
+                -fno-builtin -Iinclude -Iuser
+USER_LDFLAGS := $(ARCH_LD) -T user/linker.ld -ffreestanding -nostdlib -static
 
 .PHONY: all run iso run-iso clean
+.SECONDARY:
 
 all: $(KERNEL)
 
@@ -53,6 +67,20 @@ $(BUILD)/%.o: src/%.c $(wildcard include/*.h)
 
 $(BUILD)/%.o: src/%.s
 	@mkdir -p $(dir $@)
+	$(CC) $(ARCH_C) -c $< -o $@
+
+$(BUILD)/user/%.o: user/%.c user/libc.h include/syscall_nums.h
+	@mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD)/user/crt0.o: user/crt0.s
+	@mkdir -p $(dir $@)
+	$(CC) $(ARCH_C) -c $< -o $@
+
+$(BUILD)/user/%: $(BUILD)/user/%.o $(USER_LIB) user/linker.ld
+	$(CC) $(USER_LDFLAGS) -o $@ $(USER_LIB) $<
+
+$(BUILD)/initrd.o: user/initrd.s $(USER_BINS)
 	$(CC) $(ARCH_C) -c $< -o $@
 
 run: $(KERNEL)

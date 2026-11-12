@@ -16,6 +16,7 @@
 #include "vfs.h"
 #include "string.h"
 #include "kprintf.h"
+#include "task.h"
 
 #define MAX_MOUNTS 8
 
@@ -412,6 +413,7 @@ int vfs_open(const char *path, uint32_t flags)
     fds[fd].node   = n;
     fds[fd].flags  = flags;
     fds[fd].offset = (flags & VFS_O_APPEND) ? n->size : 0;
+    fds[fd].owner  = sched_active() ? task_current()->pid : 1;
     n->open_count++;
     return fd;
 }
@@ -464,6 +466,19 @@ int vfs_close(int fd)
 const vfs_fd_t *vfs_fd_info(int fd)
 {
     return get_fd(fd);
+}
+
+bool vfs_fd_owned(int fd, uint32_t pid)
+{
+    vfs_fd_t *f = get_fd(fd);
+    return f && f->owner == pid;
+}
+
+void vfs_close_owner(uint32_t pid)
+{
+    for (int i = 0; i < VFS_MAX_FDS; i++)
+        if (fds[i].node && fds[i].owner == pid)
+            vfs_close(i);
 }
 
 const char *vfs_strerror(int err)

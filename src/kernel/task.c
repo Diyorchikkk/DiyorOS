@@ -28,6 +28,9 @@
 #include "string.h"
 #include "drivers.h"
 #include "config.h"
+#include "irq.h"
+#include "cpu.h"
+#include "vfs.h"
 
 static task_t tasks[MAX_TASKS];
 static task_t *current = 0;
@@ -39,19 +42,7 @@ static uint32_t switch_count = 0;
 static volatile bool need_resched = false;
 static bool active = false;
 
-/* Uzilishlarni vaqtincha o'chirish va avvalgi holatni qaytarish */
-static inline uint32_t irq_save(void)
-{
-    uint32_t flags;
-    __asm__ volatile ("pushf; pop %0; cli" : "=r"(flags) : : "memory");
-    return flags;
-}
-
-static inline void irq_restore(uint32_t flags)
-{
-    if (flags & 0x200)                 /* IF biti: avval yoqilgan bo'lsa */
-        __asm__ volatile ("sti" : : : "memory");
-}
+static uint32_t foreground_pid = 0;   /* shell kutayotgan (oldingi plandagi) jarayon */
 
 /* Yangi vazifa birinchi marta shu yerdan boshlanadi */
 static void task_trampoline(void)
@@ -145,21 +136,65 @@ uint32_t task_create(const char *name, task_entry_t entry, uint32_t arg)
 }
 
 /* ZOMBIE vazifalarning steklarini bo'shatish. Faqat shell kontekstidan chaqiriladi */
-void task_reap(void)
+static void reap(uint32_t only_pid)
 {
     for (int i = 0; i < MAX_TASKS; i++) {
         uint32_t flags = irq_save();
         task_t *t = &tasks[i];
+        if (only_pid && t->pid != only_pid) {
+            irq_restore(flags);
+            continue;
+        }
         uint8_t *stack = 0;
-        if (t->state == TASK_ZOMBIE && t != current) {
+        uint32_t *dir = 0;
+        uint32_t pid = 0;
+        if (t->state == TASK_ZOMBIE && t != current && t->pid != foreground_pid) {
             stack = t->stack;
+            dir = t->page_dir;
+            pid = t->pid;
             t->stack = 0;
+            t->page_dir = 0;
             t->state = TASK_UNUSED;
         }
         irq_restore(flags);
         if (stack)
             kfree(stack);
+        if (dir)
+            paging_free_directory(dir);       /* jarayonning butun xotirasi qaytariladi */
+        if (pid)
+            vfs_close_owner(pid);             /* yopilmay qolgan fayllari */
     }
+}
+
+void task_reap(void)             { reap(0); }
+void task_reap_pid(uint32_t pid) { if (pid) reap(pid); }
+
+/* Vazifani kutayotganlarni (task_wait) uyg'otish */
+static void wake_waiters(uint32_t pid)
+{
+    for (int i = 0; i < MAX_TASKS; i++)
+        if (tasks[i].state == TASK_BLOCKED && tasks[i].wait_pid == pid) {
+            tasks[i].wait_pid = 0;
+            task_unblock(&tasks[i]);
+        }
+}
+
+/* Vazifani ZOMBIE qilish. Uzilishlar o'chiq holda chaqiriladi */
+static void make_zombie(task_t *t, int32_t code)
+{
+    t->state = TASK_ZOMBIE;
+    t->exit_code = code;
+    keyboard_cancel_waiter(t);
+    wake_waiters(t->pid);
+    need_resched = true;
+}
+
+task_t *task_find(uint32_t pid)
+{
+    for (int i = 0; i < MAX_TASKS; i++)
+        if (tasks[i].state != TASK_UNUSED && tasks[i].pid == pid)
+            return &tasks[i];
+    return 0;
 }
 
 bool task_kill(uint32_t pid)
@@ -168,29 +203,115 @@ bool task_kill(uint32_t pid)
         return false;                  /* idle va shell ni o'ldirib bo'lmaydi */
 
     uint32_t flags = irq_save();
-    for (int i = 0; i < MAX_TASKS; i++) {
-        task_t *t = &tasks[i];
-        if (t->state != TASK_UNUSED && t->state != TASK_ZOMBIE && t->pid == pid) {
-            /* Vazifa hozir ishlamayapti (ishlayotgani — biz), shuning uchun
-               uni darhol to'xtatsa bo'ladi: endi scheduler uni tanlamaydi */
-            t->state = TASK_ZOMBIE;
-            strcpy(t->note, "o'ldirildi (kill)");
-            irq_restore(flags);
-            task_reap();
-            return true;
-        }
+    task_t *t = task_find(pid);
+    if (t && t->state != TASK_ZOMBIE) {
+        /* Vazifa hozir ishlamayapti (ishlayotgani — biz), shuning uchun
+           uni darhol to'xtatsa bo'ladi: endi scheduler uni tanlamaydi */
+        make_zombie(t, EXIT_KILLED);
+        strcpy(t->note, "o'ldirildi (kill)");
+        irq_restore(flags);
+        task_reap();
+        return true;
     }
     irq_restore(flags);
     return false;
 }
 
-void task_exit(void)
+/* Ctrl+C: klaviatura uzilishi ichidan chaqiriladi, shuning uchun xotirani
+   bo'shatmaymiz — faqat ZOMBIE qilamiz, qolganini shell (task_reap) qiladi */
+void task_signal_kill(uint32_t pid, int32_t code)
+{
+    uint32_t flags = irq_save();
+    task_t *t = task_find(pid);
+    if (t && t->user && t->state != TASK_ZOMBIE)
+        make_zombie(t, code);
+    irq_restore(flags);
+}
+
+void task_exit_code(int32_t code)
 {
     __asm__ volatile ("cli");
-    current->state = TASK_ZOMBIE;
+    make_zombie(current, code);
     task_yield();                      /* boshqa vazifaga o'tamiz va bu yerga qaytmaymiz */
     for (;;)
         __asm__ volatile ("hlt");
+}
+
+void task_exit(void)
+{
+    task_exit_code(0);
+}
+
+/* pid tugashini kutish. Chiqish kodini qaytaradi (jarayon topilmasa — 0) */
+int32_t task_wait(uint32_t pid)
+{
+    for (;;) {
+        uint32_t flags = irq_save();
+        task_t *t = task_find(pid);
+        if (!t) {
+            irq_restore(flags);
+            return 0;
+        }
+        if (t->state == TASK_ZOMBIE) {
+            int32_t code = t->exit_code;
+            irq_restore(flags);
+            return code;
+        }
+        current->wait_pid = pid;
+        task_block();                  /* make_zombie -> wake_waiters bizni uyg'otadi */
+        irq_restore(flags);
+    }
+}
+
+void task_set_foreground(uint32_t pid) { foreground_pid = pid; }
+uint32_t task_foreground(void)         { return foreground_pid; }
+
+/*
+ * User jarayon yaratish. Kernel stekida uzilish kadri quriladi, lekin bu
+ * safar segmentlar USER (ring 3) va useresp/ss ham bor — iret protsessorni
+ * ring 3 ga, dasturning entry nuqtasiga va uning o'z stekiga o'tkazadi.
+ */
+uint32_t task_create_user(const char *name, uint32_t *page_dir, uint32_t entry,
+                          uint32_t user_esp, uint32_t brk, uint32_t pages)
+{
+    uint8_t *stack = kmalloc(TASK_STACK_SIZE);   /* jarayonning KERNEL steki (syscall va uzilishlar uchun) */
+    if (!stack)
+        return 0;
+
+    uint32_t flags = irq_save();
+    task_t *t = alloc_slot();
+    if (!t) {
+        irq_restore(flags);
+        kfree(stack);
+        return 0;
+    }
+    memset(t, 0, sizeof(*t));
+    t->pid        = next_pid++;
+    strncpy(t->name, name, TASK_NAME_LEN - 1);
+    t->stack      = stack;
+    t->user       = true;
+    t->page_dir   = page_dir;
+    t->brk_start  = brk;
+    t->brk        = brk;
+    t->user_pages = pages;
+    t->parent_pid = current->pid;
+
+    /* Kadr stek tepasiga TO'G'RI joylashadi: keyingi uzilishlarda protsessor
+       aynan shu joyga (TSS.esp0) yozadi */
+    registers_t *r = (registers_t *)(stack + TASK_STACK_SIZE - sizeof(registers_t));
+    memset(r, 0, sizeof(*r));
+    r->gs = r->fs = r->es = r->ds = USER_DS;
+    r->cs      = USER_CS;
+    r->eip     = entry;
+    r->eflags  = 0x202;                       /* IF=1 */
+    r->useresp = user_esp;
+    r->ss      = USER_DS;
+    t->regs    = r;
+    t->state   = TASK_READY;
+
+    uint32_t pid = t->pid;
+    irq_restore(flags);
+    return pid;
 }
 
 /* int 0x81 — "navbatni ber" uzilishi. U idt.c orqali sched_yield_handler ni chaqiradi */
@@ -303,6 +424,11 @@ static registers_t *switch_to(registers_t *r)
     current = next;
     current->state = TASK_RUNNING;
     slice_left = SCHED_QUANTUM;
+
+    /* v0.5: jarayonning xotirasi (CR3) va kernel steki (TSS.esp0) */
+    if (current->user)
+        tss_set_kernel_stack((uint32_t)current->stack + TASK_STACK_SIZE);
+    paging_switch(current->page_dir ? current->page_dir : paging_kernel_directory());
     return current->regs;              /* isr_common shu stekka o'tadi */
 }
 

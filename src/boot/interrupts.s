@@ -24,6 +24,13 @@ gdt_flush:
     ljmp $0x08, $1f           # 0x08 = kernel CODE segmenti (CS ni yangilash)
 1:  ret
 
+# void tss_flush(void) — GDT dagi 5-yozuv (0x28) ni TSS sifatida yuklash
+.global tss_flush
+tss_flush:
+    mov $0x28, %ax
+    ltr %ax
+    ret
+
 # void idt_load(uint32_t idt_ptr_manzili)
 .global idt_load
 idt_load:
@@ -60,6 +67,8 @@ isr\n:
 .irp i, 32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47
     ISR_NOERR \i
 .endr
+# 0x80 (128): syscall — dasturlar kernelga murojaat qiladi (v0.5)
+ISR_NOERR 128
 # 0x81 (129): task_yield() — vazifa navbatni o'zi beradi (v0.3)
 ISR_NOERR 129
 

@@ -124,10 +124,10 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
     }
 
     gdt_init();
-    boot_ok("GDT (segmentlar jadvali) o'rnatildi");
+    boot_ok("GDT (ring 0 / ring 3 segmentlari) va TSS o'rnatildi");
 
     idt_init();
-    boot_ok("IDT va PIC (uzilishlar) o'rnatildi");
+    boot_ok("IDT, PIC va syscall (int 0x80) o'rnatildi");
 
     /* Xotira: IDT dan keyin, chunki paging xatolari (Page Fault) ushlanishi kerak */
     pmm_init(mbi);
@@ -145,7 +145,7 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
     boot_ok("Kernel heap tayyor (kmalloc / kfree)");
 
     rootfs_init();
-    boot_ok("Fayl tizimi: VFS, ramfs (/) va procfs (/proc)");
+    boot_ok("Fayl tizimi: VFS, ramfs (/), procfs (/proc), dasturlar (/bin)");
 
     timer_init(TIMER_HZ);
     timer_on_second(status_bar_update);

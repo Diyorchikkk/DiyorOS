@@ -27,6 +27,8 @@ void     timer_on_second(void (*callback)(uint32_t seconds));
 void keyboard_init(void);
 char keyboard_getchar(void);   /* tugma bosilguncha kutadi */
 void keyboard_inject(char c);  /* boshqa drayver (sichqoncha) buferga belgi qo'shishi uchun */
+void keyboard_cancel_waiter(void *task);   /* tugagan vazifa tugmani endi kutmaydi */
+#define KEY_CTRL_C 0x03
 
 /* --- Sichqoncha (PS/2, IRQ12) — hozircha faqat g'ildirak --- */
 int  mouse_init(void);         /* 1 — g'ildirakli sichqoncha topildi */
