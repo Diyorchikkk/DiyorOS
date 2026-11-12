@@ -39,6 +39,10 @@ enum {
     VFS_EMFILE      = -10,  /* ochiq fayllar juda ko'p */
     VFS_EFBIG       = -11,  /* fayl juda katta */
     VFS_EBUSY       = -12,  /* band (masalan, mount nuqtasi) */
+    VFS_EXDEV       = -13,  /* boshqa fayl tizimiga ko'chirib bo'lmaydi */
+    VFS_EIO         = -15,  /* disk xatosi */
+    VFS_ENOSPC      = -16,  /* diskda joy qolmadi */
+    VFS_ENODEV      = -17,  /* fayl tizimi ulanmagan */
 };
 
 typedef enum { VFS_FILE = 1, VFS_DIR = 2 } vfs_type_t;
@@ -55,6 +59,7 @@ typedef struct {
     int     (*create)(struct vfs_node *dir, const char *name, vfs_type_t type, struct vfs_node **out);
     int     (*unlink)(struct vfs_node *dir, struct vfs_node *child);
     int     (*rename)(struct vfs_node *child, struct vfs_node *new_dir, const char *new_name);
+    int     (*unmount)(struct vfs_node *root);      /* v0.6: fayl tizimini uzish */
 } vfs_ops_t;
 
 /* Fayl yoki papka ("inode") */
@@ -69,6 +74,7 @@ typedef struct vfs_node {
     struct vfs_node *parent;
     struct vfs_node *mount;          /* bu papkaga boshqa fayl tizimi ulangan bo'lsa — uning ildizi */
     uint32_t         open_count;     /* nechta fd orqali ochiq */
+    bool             mountpoint;     /* faqat boshqa fayl tizimini ulash uchun (/disk) */
 
     /* ramfs uchun */
     struct vfs_node *first_child;
@@ -78,6 +84,16 @@ typedef struct vfs_node {
 
     /* procfs uchun: fayl mazmunini yaratuvchi funksiya */
     int (*generate)(char *buf, uint32_t size);
+
+    /* fat32 uchun (v0.6): fayl diskda qayerda */
+    struct {
+        uint32_t cluster;        /* birinchi klaster (0 — bo'sh fayl) */
+        uint32_t dir_index;      /* ota papkadagi 8.3 yozuvning tartib raqami */
+        uint8_t  lfn_count;      /* undan oldingi uzun nom (LFN) yozuvlari soni */
+        uint8_t  attr;
+        char     short_name[11]; /* "SALOM   TXT" */
+        bool     loaded;         /* papka ichidagilar diskdan o'qilganmi */
+    } fat;
 } vfs_node_t;
 
 /* vfs_open flaglari */
@@ -99,6 +115,8 @@ void        vfs_init(void);
 vfs_node_t *vfs_root(void);
 int         vfs_mount(const char *path, vfs_node_t *fs_root);
 int         vfs_mount_info(int i, const char **path, const char **fs_name);
+int         vfs_unmount(const char *path);
+int         vfs_mkmountpoint(const char *path);   /* ulanmagan paytda ichiga yozib bo'lmaydigan papka */
 
 /* Yo'llar */
 int         vfs_lookup(const char *path, vfs_node_t **out);
@@ -129,7 +147,23 @@ const char *vfs_strerror(int err);
 
 /* Fayl tizimlari */
 void        rootfs_init(void);           /* yuklanishda: papkalar, fayllar, /proc */
+int         disk_mount(void);            /* FAT32 diskni /disk ga ulash (v0.6) */
 vfs_node_t *ramfs_create_root(void);
 vfs_node_t *procfs_create_root(void);
+
+/* fat32.c (v0.6) */
+typedef struct {
+    bool     mounted;
+    char     label[12];
+    uint32_t volume_id;
+    uint32_t total_clusters;
+    uint32_t free_clusters;
+    uint32_t cluster_bytes;
+    uint32_t fat_sectors;
+    uint32_t partition_lba;
+} fat32_stats_t;
+int         fat32_mount(vfs_node_t **root);          /* diskni o'qib, ildiz tugunini beradi */
+int         fat32_mkfs(const char *label);           /* diskni FAT32 da formatlash */
+void        fat32_stats(fat32_stats_t *st);
 
 #endif

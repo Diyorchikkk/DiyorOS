@@ -331,10 +331,10 @@ static void cmd_shutdown(const char *args)
 }
 
 /* Buyruqlar jadvali */
-typedef enum { CAT_GENERAL, CAT_FILES, CAT_MEMORY, CAT_TASKS, CAT_SYSTEM, CAT_COUNT } category_t;
+typedef enum { CAT_GENERAL, CAT_FILES, CAT_DISK, CAT_MEMORY, CAT_TASKS, CAT_SYSTEM, CAT_COUNT } category_t;
 
 static const char *category_names[CAT_COUNT] = {
-    "Umumiy", "Fayllar (v0.4)", "Xotira (v0.2)", "Vazifalar (v0.3)", "Tizim va sinov"
+    "Umumiy", "Fayllar (v0.4)", "Disk (v0.6)", "Xotira (v0.2)", "Vazifalar (v0.3)", "Tizim va sinov"
 };
 
 typedef struct {
@@ -371,6 +371,11 @@ static const command_t commands[] = {
     { "stat",      CAT_FILES,   "Fayl haqida batafsil (inode, vaqtlar)",           cmd_stat      },
     { "wc",        CAT_FILES,   "Qator, so'z, bayt soni: wc salom.txt",            cmd_wc        },
     { "df",        CAT_FILES,   "Fayl tizimlari bandligi",                         cmd_df        },
+
+    { "disk",      CAT_DISK,    "Disk va FAT32 haqida ma'lumot",                   cmd_disk      },
+    { "mkfs",      CAT_DISK,    "Diskni FAT32 da formatlash: mkfs [nom]",          cmd_mkfs      },
+    { "mount",     CAT_DISK,    "Ulangan fayl tizimlari | mount disk",             cmd_mount     },
+    { "umount",    CAT_DISK,    "Fayl tizimini uzish: umount /disk",               cmd_umount    },
 
     { "mem",       CAT_MEMORY,  "Xotira holati: RAM, paging, heap",                cmd_mem       },
     { "memmap",    CAT_MEMORY,  "BIOS xotira xaritasi",                            cmd_memmap    },
@@ -466,14 +471,22 @@ static void show_line_again(const char *buf)
 static void tab_complete(char *buf, int *len)
 {
     int start = *len;
-    while (start > 0 && buf[start - 1] != ' ')
-        start--;
+    while (start > 0 && !(buf[start - 1] == ' ' && (start < 2 || buf[start - 2] != '\\')))
+        start--;                                /* "\ " — so'zning bir qismi */
     bool is_command = true;
     for (int i = 0; i < start; i++)
         if (buf[i] != ' ')
             is_command = false;
 
-    const char *word = buf + start;
+    char word_buf[LINE_MAX];                    /* "\ " larni oddiy bo'sh joyga aylantiramiz */
+    int wl = 0;
+    for (int i = start; i < *len; i++) {
+        if (buf[i] == '\\' && i + 1 < *len)
+            i++;
+        word_buf[wl++] = buf[i];
+    }
+    word_buf[wl] = 0;
+    const char *word = word_buf;
     const char *names[MAX_MATCHES];
     bool is_dir[MAX_MATCHES];
     int count = 0;
@@ -526,7 +539,11 @@ static void tab_complete(char *buf, int *len)
         common = j;
     }
 
-    for (int j = plen; j < common && *len < LINE_MAX - 2; j++) {
+    for (int j = plen; j < common && *len < LINE_MAX - 3; j++) {
+        if (names[0][j] == ' ') {               /* bo'sh joy -> "\ " */
+            buf[(*len)++] = '\\';
+            vga_putc('\\');
+        }
         buf[(*len)++] = names[0][j];
         vga_putc(names[0][j]);
     }

@@ -49,17 +49,39 @@ static void fs_error(const char *cmd, const char *path, int err)
 }
 
 /* "a b" -> birinchi so'z out ga, qolgani qaytariladi */
-static const char *take_word(const char *s, char *out, int max)
+/*
+ * Keyingi argumentni olish. Bo'sh joyli nomlar uchun (v0.6, FAT32 da uchraydi):
+ *   "Mening hujjatim.txt"     — qo'shtirnoq ichida
+ *   Mening\ hujjatim.txt      — "\ " bilan (Tab shunday yozadi)
+ */
+const char *shell_next_arg(const char *s, char *out, int max)
 {
     while (*s == ' ')
         s++;
     int i = 0;
-    while (*s && *s != ' ' && i < max - 1)
-        out[i++] = *s++;
+    bool quoted = false;
+    while (*s && (quoted || *s != ' ')) {
+        if (*s == '"') {
+            quoted = !quoted;
+            s++;
+            continue;
+        }
+        if (*s == '\\' && s[1]) {
+            s++;
+        }
+        if (i < max - 1)
+            out[i++] = *s;
+        s++;
+    }
     out[i] = 0;
     while (*s == ' ')
         s++;
     return s;
+}
+
+static const char *take_word(const char *s, char *out, int max)
+{
+    return shell_next_arg(s, out, max);
 }
 
 static void print_time(const rtc_time_t *t)
@@ -447,7 +469,15 @@ void cmd_df(const char *args)
 
     kprintf("Fayl tizimi  Ulangan   Tarkibi\n");
     kprintf("ramfs        /         %u papka, %u fayl, %u bayt ma'lumot\n", dirs, files, bytes);
-    kprintf("procfs       /proc     virtual, xotira egallamaydi\n\n");
+    kprintf("procfs       /proc     virtual, xotira egallamaydi\n");
+    fat32_stats_t st;
+    fat32_stats(&st);
+    if (st.mounted) {
+        kprintf("fat32        /disk     \"%s\": %u KB band, %u MB bo'sh (diskda)\n", st.label,
+                (st.total_clusters - st.free_clusters) * (st.cluster_bytes / 512) / 2,
+                st.free_clusters / (1024 * 1024 / st.cluster_bytes));
+    }
+    kprintf("\n");
     kprintf("ramfs heap dan egallagan joy: %u bayt (tugunlar + fayl buferlari)\n", alloc);
     kprintf("Bo'sh RAM: %u KB (fayllar shu hisobidan o'sishi mumkin)\n",
             (pmm_total_frames() - pmm_used_frames()) * 4);

@@ -1,4 +1,4 @@
-# DiyorOS v0.5
+# DiyorOS v0.6
 
 C va Assembly'da noldan yozilgan kichik operatsion tizim. Arxitektura: x86, 32-bit protected mode.
 Linux, Windows yoki boshqa OS kodidan foydalanilmagan. Kompyuter yoqilgandan keyin ekranga chiqadigan
@@ -19,8 +19,11 @@ Keyin loyiha papkasida:
 
 ```bash
 make        # kernelni yig'adi -> build/diyoros.bin
-make run    # QEMU oynasida OS ochiladi
+make run    # QEMU oynasida OS ochiladi (birinchi marta disk.img ham yaratiladi)
 ```
+
+Birinchi ishga tushirishda disk bo'sh bo'ladi: DiyorOS ichida `mkfs` deb yozib, `ha` bilan tasdiqlang.
+Shundan keyin `/disk` dagi fayllar o'chirib-yoqqandan keyin ham saqlanadi.
 
 `make` buyrug'i `i686-elf-gcc` topilmasa, Mac'dagi oddiy `gcc` (aslida clang) bilan yig'ishga
 urinadi va xato beradi. Bunday holatda yuqoridagi `brew install` qadamini qayta bajaring.
@@ -84,11 +87,13 @@ DiyorOS/
     │   ├── timer.c       PIT taymer, IRQ0
     │   ├── keyboard.c    PS/2 klaviatura, IRQ1, ring buffer
     │   ├── mouse.c       PS/2 sichqoncha g'ildiragi, IRQ12
+    │   ├── ata.c         ATA (IDE) qattiq disk, PIO (v0.6)
     │   └── rtc.c         CMOS real vaqt soati
     ├── fs/               fayl tizimi (v0.4) — batafsil: docs/v0.4-fayl-tizimi.md
     │   ├── vfs.c         yo'llar, fayl deskriptorlari, mount
     │   ├── ramfs.c       xotiradagi fayl tizimi
     │   ├── procfs.c      /proc virtual fayllari
+    │   ├── fat32.c       FAT32: diskdagi fayl tizimi (v0.6)
     │   └── rootfs.c      yuklanishda papka va fayllarni yaratish
     ├── mm/               xotira (v0.2) — batafsil: docs/v0.2-xotira.md
     │   ├── pmm.c         fizik xotira menejeri (bitmap)
@@ -102,6 +107,7 @@ DiyorOS/
         ├── cmd_memory.c  xotira buyruqlari (mem, alloc, heap, memtest...)
         ├── cmd_process.c vazifa buyruqlari (ps, spawn, kill, sched)
         ├── cmd_fs.c      fayl buyruqlari (ls, cd, cat, cp, mv, rm, tree...)
+        ├── cmd_disk.c    disk buyruqlari (disk, mkfs, mount, umount)
         └── editor.c      matn muharriri (edit)
 user/                     dasturlar (v0.5) — ring 3 da ishlaydi, /bin ga tushadi
     ├── crt0.s            dastur boshlanishi: main(argc, argv)
@@ -169,7 +175,7 @@ keyingi uzilishgacha uxlaydi va 100% band bo'lmaydi.
 | **v0.3** ✅ | **Multitasking**: kontekst almashtirish, Round-Robin scheduler, `ps`, `kill`, `spawn` — [batafsil](docs/v0.3-jarayonlar.md) | Jarayonlar, rejalashtirish |
 | **v0.4** ✅ | VFS, ramfs, procfs (`/proc`), fayl buyruqlari, matn muharriri, Tab — [batafsil](docs/v0.4-fayl-tizimi.md) | Fayl tizimlari |
 | **v0.5** ✅ | User mode (ring 3), TSS, alohida xotira, syscall (`int 0x80`), ELF yuklovchi, libc, 6 ta dastur, Ctrl+C — [batafsil](docs/v0.5-user-mode.md) | Himoya, tizim chaqiruvlari |
-| v0.6 | Disk drayveri (ATA), FAT12/FAT32 o'qish | Kiritish-chiqarish, disklar |
+| **v0.6** ✅ | ATA disk drayveri, FAT32 (o'qish/yozish, uzun nomlar, mkfs), `/disk`, mount/umount — [batafsil](docs/v0.6-disk-fat32.md) | Kiritish-chiqarish, disklar |
 | Diplom | Semaforlar/mutex, oddiy grafik rejim, tarmoq yoki ARM64'ga port qilish | Sinxronizatsiya va boshqalar |
 
 ---

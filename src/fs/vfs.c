@@ -71,10 +71,19 @@ static vfs_node_t *follow_mount(vfs_node_t *n)
  * "/" bilan boshlansa — ildizdan, aks holda joriy papkadan boshlaymiz.
  * Yo'lni "/" bo'yicha qismlarga ajratib, har birini papkadan qidiramiz.
  */
+#define HOME_DIR "/home/diyorbek"
+
 int vfs_lookup(const char *path, vfs_node_t **out)
 {
     if (!path)
         return VFS_EINVAL;
+
+    /* "~" yoki "~/..." — uy papkasi */
+    char expanded[VFS_PATH_MAX];
+    if (path[0] == '~' && (path[1] == 0 || path[1] == '/')) {
+        ksnprintf(expanded, sizeof(expanded), "%s%s", HOME_DIR, path + 1);
+        path = expanded;
+    }
 
     vfs_node_t *node = (path[0] == '/') ? root : cwd;
     char part[VFS_NAME_MAX];
@@ -119,7 +128,11 @@ static int split_parent(const char *path, vfs_node_t **dir, char *name)
     size_t len = strlen(path);
     if (len == 0 || len >= VFS_PATH_MAX)
         return VFS_EINVAL;
-    strcpy(buf, path);
+    if (path[0] == '~' && (path[1] == 0 || path[1] == '/'))
+        ksnprintf(buf, sizeof(buf), "%s%s", HOME_DIR, path + 1);
+    else
+        strcpy(buf, path);
+    len = strlen(buf);
 
     while (len > 1 && buf[len - 1] == '/')      /* oxirdagi "/" larni olib tashlash */
         buf[--len] = 0;
@@ -235,6 +248,52 @@ int vfs_mount(const char *path, vfs_node_t *fs_root)
     return VFS_OK;
 }
 
+/* Fayl tizimini uzish: ochiq fayl yoki joriy papka uning ichida bo'lmasligi kerak */
+int vfs_unmount(const char *path)
+{
+    vfs_node_t *dir;
+    int err = vfs_lookup(path, &dir);
+    if (err)
+        return err;
+    int idx = -1;
+    for (int i = 1; i < mount_count; i++)
+        if (mounts[i].fs_root == dir)
+            idx = i;
+    if (idx < 0)
+        return VFS_EINVAL;                  /* bu yerga hech narsa ulanmagan */
+
+    for (vfs_node_t *n = cwd; ; n = n->parent) {   /* joriy papka shu fayl tizimidami? */
+        if (n == dir)
+            return VFS_EBUSY;
+        if (n == root || !n->parent)
+            break;
+    }
+    for (int i = 0; i < VFS_MAX_FDS; i++)
+        if (fds[i].node && fds[i].node->ops == dir->ops)
+            return VFS_EBUSY;               /* ochiq fayllar bor */
+
+    /* Mount nuqtasini topib, ulanishni olib tashlaymiz */
+    char mp[VFS_PATH_MAX];
+    strcpy(mp, mounts[idx].path);
+    vfs_node_t *parent = dir->parent;
+    vfs_node_t *point = 0;
+    vfs_node_t *c;
+    for (uint32_t i = 0; parent->ops->readdir && (c = parent->ops->readdir(parent, i)); i++)
+        if (c->mount == dir)
+            point = c;
+    if (!point)
+        return VFS_EINVAL;
+    point->mount = 0;
+
+    for (int i = idx; i < mount_count - 1; i++)
+        mounts[i] = mounts[i + 1];
+    mount_count--;
+
+    if (dir->ops->unmount)
+        dir->ops->unmount(dir);
+    return VFS_OK;
+}
+
 int vfs_mount_info(int i, const char **path, const char **fs_name)
 {
     if (i < 0 || i >= mount_count)
@@ -265,11 +324,22 @@ static int create_node(const char *path, vfs_type_t type, vfs_node_t **out)
     int err = split_parent(path, &dir, name);
     if (err)
         return err;
+    if (dir->mountpoint && !dir->mount)
+        return VFS_ENODEV;                   /* masalan, disk ulanmagan /disk */
     if (!dir->ops->create)
         return VFS_EROFS;
     if (dir->ops->finddir(dir, name))
         return VFS_EEXIST;
     return dir->ops->create(dir, name, type, out);
+}
+
+int vfs_mkmountpoint(const char *path)
+{
+    vfs_node_t *n;
+    int err = create_node(path, VFS_DIR, &n);
+    if (!err)
+        n->mountpoint = true;
+    return err;
 }
 
 int vfs_mkdir(const char *path)
@@ -363,8 +433,10 @@ int vfs_rename(const char *from, const char *to)
             return err;
     }
 
-    if (dst_dir->ops != src->ops || !src->ops->rename)
-        return VFS_EROFS;                    /* boshqa fayl tizimiga ko'chirib bo'lmaydi */
+    if (dst_dir->ops != src->ops)
+        return VFS_EXDEV;                    /* boshqa fayl tizimiga ko'chirib bo'lmaydi */
+    if (!src->ops->rename)
+        return VFS_EROFS;
     if (src->type == VFS_DIR && is_ancestor(src, dst_dir))
         return VFS_EINVAL;                   /* papkani o'z ichiga ko'chirib bo'lmaydi */
 
@@ -497,6 +569,10 @@ const char *vfs_strerror(int err)
     case VFS_EMFILE:    return "ochiq fayllar juda ko'p";
     case VFS_EFBIG:     return "fayl juda katta (maksimum 1 MB)";
     case VFS_EBUSY:     return "band (joriy papka, mount nuqtasi yoki ochiq fayl)";
+    case VFS_EXDEV:     return "boshqa fayl tizimiga ko'chirib bo'lmaydi (cp va rm ishlating)";
+    case VFS_EIO:       return "disk bilan ishlashda xato";
+    case VFS_ENOSPC:    return "diskda joy qolmadi";
+    case VFS_ENODEV:    return "disk ulanmagan (formatlash: mkfs, ulash: mount disk)";
     default:            return "noma'lum xato";
     }
 }

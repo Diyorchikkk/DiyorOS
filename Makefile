@@ -6,6 +6,10 @@
 #  make iso    — yuklanadigan ISO (GRUB kerak, ixtiyoriy)
 #  make clean  — build papkasini tozalash
 #
+#  v0.6: disk.img — 64 MB virtual qattiq disk (birinchi 'make run' da yaratiladi,
+#  'make clean' uni o'chirmaydi: undagi fayllaringiz saqlanib qoladi).
+#  Yangi bo'sh disk: make newdisk
+#
 #  v0.5: user/ dagi dasturlar alohida yig'iladi (0x40000000 manzilga, ring 3
 #  uchun) va user/initrd.s orqali kernel ichiga joylanadi -> /bin.
 #
@@ -31,6 +35,9 @@ endif
 BUILD    := build
 KERNEL   := $(BUILD)/diyoros.bin
 ISO      := $(BUILD)/diyoros.iso
+DISK     := disk.img
+DISK_MB  := 64
+QEMU_DISK := -drive file=$(DISK),format=raw,if=ide,index=0
 
 CFLAGS   := $(ARCH_C) -std=gnu99 -ffreestanding -O2 -Wall -Wextra \
             -fno-stack-protector -fno-asynchronous-unwind-tables \
@@ -52,7 +59,7 @@ USER_CFLAGS  := $(ARCH_C) -std=gnu99 -ffreestanding -O2 -Wall -Wextra \
                 -fno-builtin -Iinclude -Iuser
 USER_LDFLAGS := $(ARCH_LD) -T user/linker.ld -ffreestanding -nostdlib -static
 
-.PHONY: all run iso run-iso clean
+.PHONY: all run iso run-iso clean newdisk
 .SECONDARY:
 
 all: $(KERNEL)
@@ -83,8 +90,16 @@ $(BUILD)/user/%: $(BUILD)/user/%.o $(USER_LIB) user/linker.ld
 $(BUILD)/initrd.o: user/initrd.s $(USER_BINS)
 	$(CC) $(ARCH_C) -c $< -o $@
 
-run: $(KERNEL)
-	$(QEMU) -kernel $(KERNEL) -m 128M -rtc base=localtime $(QEMU_DISPLAY)
+$(DISK):
+	dd if=/dev/zero of=$(DISK) bs=1048576 count=$(DISK_MB)
+	@echo ">>> Bo'sh disk yaratildi: $(DISK). DiyorOS ichida 'mkfs' bilan formatlang."
+
+newdisk:
+	rm -f $(DISK)
+	$(MAKE) $(DISK)
+
+run: $(KERNEL) $(DISK)
+	$(QEMU) -kernel $(KERNEL) -m 128M -rtc base=localtime $(QEMU_DISK) $(QEMU_DISPLAY)
 
 iso: $(KERNEL)
 	@mkdir -p $(BUILD)/iso/boot/grub
@@ -92,8 +107,8 @@ iso: $(KERNEL)
 	cp grub.cfg $(BUILD)/iso/boot/grub/grub.cfg
 	grub-mkrescue -o $(ISO) $(BUILD)/iso 2>/dev/null || i686-elf-grub-mkrescue -o $(ISO) $(BUILD)/iso
 
-run-iso: iso
-	$(QEMU) -cdrom $(ISO) -m 128M -rtc base=localtime $(QEMU_DISPLAY)
+run-iso: iso $(DISK)
+	$(QEMU) -cdrom $(ISO) -m 128M -rtc base=localtime $(QEMU_DISK) $(QEMU_DISPLAY)
 
 clean:
 	rm -rf $(BUILD)

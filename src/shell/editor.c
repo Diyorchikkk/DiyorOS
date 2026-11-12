@@ -291,12 +291,7 @@ void cmd_edit(const char *args)
     }
     memset(e, 0, sizeof(*e));
     e->text = text;
-    strncpy(e->path, args, VFS_PATH_MAX - 1);
-    for (char *p = e->path; *p; p++)        /* faqat birinchi so'z */
-        if (*p == ' ') {
-            *p = 0;
-            break;
-        }
+    shell_next_arg(args, e->path, VFS_PATH_MAX);   /* "bo'sh joyli nom" ham bo'lishi mumkin */
 
     int err = load(e);
     if (err) {

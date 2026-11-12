@@ -35,6 +35,13 @@ void cmd_stat(const char *args);
 void cmd_wc(const char *args);
 void cmd_df(const char *args);
 bool shell_redirect(const char *args);   /* echo ... > fayl */
+const char *shell_next_arg(const char *s, char *out, int max);   /* "bo'sh joyli nom" yoki nom\\ bilan */
+
+/* cmd_disk.c (v0.6) */
+void cmd_disk(const char *args);
+void cmd_mkfs(const char *args);
+void cmd_mount(const char *args);
+void cmd_umount(const char *args);
 
 /* editor.c (v0.4) */
 void cmd_edit(const char *args);

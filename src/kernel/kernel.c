@@ -20,6 +20,7 @@
 #include "memory.h"
 #include "task.h"
 #include "vfs.h"
+#include "ata.h"
 
 uint32_t mem_lower_kb = 0;
 uint32_t mem_upper_kb = 0;
@@ -144,8 +145,34 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
     heap_init();
     boot_ok("Kernel heap tayyor (kmalloc / kfree)");
 
+    bool have_disk = ata_init();
+    if (have_disk)
+        kprintf("  [ "), vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK), kprintf("OK"),
+        vga_set_color(VGA_LIGHT_GREY, VGA_BLACK),
+        kprintf(" ] ATA disk: %s, %u MB\n", ata_info()->model, ata_info()->sectors / 2048);
+
     rootfs_init();
     boot_ok("Fayl tizimi: VFS, ramfs (/), procfs (/proc), dasturlar (/bin)");
+
+    if (have_disk) {
+        int err = disk_mount();
+        if (err == VFS_OK) {
+            fat32_stats_t st;
+            fat32_stats(&st);
+            kprintf("  [ "), vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK), kprintf("OK"),
+            vga_set_color(VGA_LIGHT_GREY, VGA_BLACK),
+            kprintf(" ] /disk: FAT32 \"%s\", %u MB bo'sh\n", st.label,
+                    st.free_clusters / (1024 * 1024 / st.cluster_bytes));
+        } else {
+            vga_set_color(VGA_YELLOW, VGA_BLACK);
+            kprintf("  [ -- ] Disk FAT32 da formatlanmagan. Formatlash: mkfs\n");
+            vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+        }
+    } else {
+        vga_set_color(VGA_YELLOW, VGA_BLACK);
+        kprintf("  [ -- ] Disk topilmadi (faqat xotiradagi fayl tizimi)\n");
+        vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+    }
 
     timer_init(TIMER_HZ);
     timer_on_second(status_bar_update);

@@ -9,12 +9,14 @@
  *   /home/diyorbek  foydalanuvchi papkasi (shell shu yerda boshlanadi)
  *   /proc           procfs ulanadi
  *   /tmp            vaqtinchalik fayllar
+ *   /disk           qattiq disk (FAT32) — o'chirib-yoqqanda ham saqlanadi (v0.6)
  */
 #include "vfs.h"
 #include "string.h"
 #include "kprintf.h"
 #include "config.h"
 #include "process.h"
+#include "ata.h"
 
 static void write_file(const char *path, const char *text)
 {
@@ -35,6 +37,7 @@ void rootfs_init(void)
     vfs_mkdir("/home/diyorbek");
     vfs_mkdir("/proc");
     vfs_mkdir("/tmp");
+    vfs_mkmountpoint("/disk");
 
     vfs_mount("/proc", procfs_create_root());
     initrd_install("/bin");
@@ -47,7 +50,7 @@ void rootfs_init(void)
 
     write_file("/etc/motd",
                "DiyorOS ga xush kelibsiz!\n"
-               "Fayl tizimi xotirada (ramfs): o'chirib-yoqilganda o'zgarishlar yo'qoladi.\n");
+               "/disk dagi fayllar diskda saqlanadi, qolganlari xotirada (ramfs).\n");
 
     write_file("/home/diyorbek/salom.txt",
                "Salom! Bu DiyorOS dagi birinchi fayl.\n"
@@ -62,10 +65,23 @@ void rootfs_init(void)
                "v0.3  multitasking: scheduler, ps, kill            [tayyor]\n"
                "v0.4  fayl tizimi: VFS, ramfs, procfs, muharrir    [tayyor]\n"
                "v0.5  user mode, syscall, ELF dasturlar            [tayyor]\n"
-               "v0.6  disk drayveri, FAT32\n"
+               "v0.6  disk drayveri, FAT32                         [tayyor]\n"
                "v0.7  grafika\n"
                "v0.8  sinxronizatsiya: mutex, semafor, pipe\n"
                "v1.0  diplom ishi\n");
 
     vfs_chdir("/home/diyorbek");
+}
+
+/* Diskni (FAT32) /disk ga ulash. Natija: VFS kodi */
+int disk_mount(void)
+{
+    vfs_node_t *root;
+    int err = fat32_mount(&root);
+    if (err)
+        return err;
+    err = vfs_mount("/disk", root);
+    if (err)
+        root->ops->unmount(root);
+    return err;
 }

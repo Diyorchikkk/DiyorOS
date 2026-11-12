@@ -1,10 +1,11 @@
 /*
  * kundalik — fayl syscall lari: open, write, read, close.
- * Kiritilgan qatorni ~/kundalik.txt oxiriga qo'shadi va butun faylni ko'rsatadi.
+ * Kiritilgan qatorni /disk/kundalik.txt oxiriga qo'shadi va butun faylni ko'rsatadi.
  */
 #include "libc.h"
 
-#define FILE_PATH "/home/diyorbek/kundalik.txt"
+/* v0.6: disk ulangan bo'lsa — diskka (o'chirib-yoqqanda ham saqlanadi) */
+static const char *FILE_PATH = "/disk/kundalik.txt";
 
 int main(void)
 {
@@ -17,6 +18,10 @@ int main(void)
     }
 
     int fd = open(FILE_PATH, O_WRITE | O_CREATE | O_APPEND);
+    if (fd < 0) {                          /* disk yo'q — xotiradagi uy papkasiga */
+        FILE_PATH = "/home/diyorbek/kundalik.txt";
+        fd = open(FILE_PATH, O_WRITE | O_CREATE | O_APPEND);
+    }
     if (fd < 0) {
         printf("Faylni ochib bo'lmadi (xato %d)\n", fd);
         return 1;
