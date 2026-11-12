@@ -26,5 +26,10 @@ void    vga_write_at(int x, int y, const char *s, uint8_t fg, uint8_t bg);
 /* Tarixni varaqlash: musbat — yuqoriga (eskiroq), manfiy — pastga */
 void    vga_scroll_view(int delta);
 int     vga_view_offset(void);   /* 0 bo'lsa — jonli ekran */
+/* To'liq ekranli dasturlar uchun (matn muharriri) */
+void    vga_screen_save(void);
+void    vga_screen_restore(void);
+void    vga_put_at(int x, int y, char c, uint8_t fg, uint8_t bg);
+void    vga_move_hw_cursor(int x, int y);
 
 #endif

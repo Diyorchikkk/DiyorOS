@@ -235,3 +235,43 @@ void vga_write_at(int x, int y, const char *s, uint8_t fg, uint8_t bg)
     while (*s && x < VGA_WIDTH)
         vga_buffer[y * VGA_WIDTH + x++] = vga_entry(*s++, color);
 }
+
+/* ---------------- To'liq ekranli dasturlar uchun (v0.4: matn muharriri) ---------------- */
+
+static uint16_t saved_screen[TEXT_ROWS][VGA_WIDTH];
+static int saved_row, saved_col;
+
+/* Matn hududini (1-24 qatorlar) saqlab qo'yish — muharrir yopilganda qaytariladi */
+void vga_screen_save(void)
+{
+    snap_to_live();
+    memcpy(saved_screen, screen_row(TEXT_TOP), sizeof(saved_screen));
+    saved_row = cursor_row;
+    saved_col = cursor_col;
+}
+
+void vga_screen_restore(void)
+{
+    memcpy(screen_row(TEXT_TOP), saved_screen, sizeof(saved_screen));
+    cursor_row = saved_row;
+    cursor_col = saved_col;
+    enable_hw_cursor();
+    update_hw_cursor();
+}
+
+void vga_put_at(int x, int y, char c, uint8_t fg, uint8_t bg)
+{
+    if (x < 0 || x >= VGA_WIDTH || y < 0 || y >= VGA_HEIGHT)
+        return;
+    vga_buffer[y * VGA_WIDTH + x] = vga_entry(c, (fg & 0x0F) | ((bg & 0x0F) << 4));
+}
+
+/* Faqat apparat kursorini ko'chirish (matn chiqarish joyiga ta'sir qilmaydi) */
+void vga_move_hw_cursor(int x, int y)
+{
+    uint16_t pos = y * VGA_WIDTH + x;
+    outb(0x3D4, 0x0F);
+    outb(0x3D5, (uint8_t)(pos & 0xFF));
+    outb(0x3D4, 0x0E);
+    outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
+}

@@ -79,6 +79,11 @@ static void keyboard_handler(registers_t *r)
             return;
         if (sc == 0x48) buffer_push(shift ? KEY_SCROLL_UP : KEY_UP);
         else if (sc == 0x50) buffer_push(shift ? KEY_SCROLL_DOWN : KEY_DOWN);
+        else if (sc == 0x4B) buffer_push(KEY_LEFT);
+        else if (sc == 0x4D) buffer_push(KEY_RIGHT);
+        else if (sc == 0x47) buffer_push(KEY_HOME);
+        else if (sc == 0x4F) buffer_push(KEY_END);
+        else if (sc == 0x53) buffer_push(KEY_DELETE);
         else if (sc == 0x49) buffer_push(KEY_PGUP);
         else if (sc == 0x51) buffer_push(KEY_PGDN);
         else if (sc == 0x1C) buffer_push('\n');   /* numpad Enter */
