@@ -16,7 +16,10 @@
 #include "cpu.h"
 
 #define MAX_TASKS        16
-#define TASK_STACK_SIZE  8192     /* har bir vazifaning kernel steki: 8 KB */
+#define TASK_STACK_SIZE  16384    /* har bir vazifaning kernel steki: 16 KB */
+#define STACK_CANARY     0x57ACC0DEu   /* stek tubidagi "qo'riqchi" qiymat (v0.6.1) */
+#define STACK_RED_ZONE   1024     /* stek tubiga shuncha qolsa — "deyarli to'ldi" (panic) */
+#define FPU_STATE_SIZE   108      /* fnsave saqlaydigan FPU holati hajmi */
 #define TASK_NAME_LEN    16
 #define TASK_NOTE_LEN    32
 #define SCHED_QUANTUM    5        /* vaqt kvanti: 5 tick = 50 ms */
@@ -56,11 +59,17 @@ typedef struct {
     uint32_t     parent_pid;
     uint32_t     wait_pid;      /* qaysi jarayon tugashini kutyapti */
     int32_t      exit_code;
+
+    /* v0.6.1 */
+    uint32_t    *stack_guard;   /* stekning eng tubi: u yerda STACK_CANARY turishi shart */
+    bool         fpu_used;      /* dastur FPU (suzuvchi nuqta) ishlatganmi */
+    uint8_t      fpu_state[FPU_STATE_SIZE];   /* boshqa dastur FPU ni olganda saqlangan holat */
 } task_t;
 
 #define EXIT_KILLED   (-9)      /* kill buyrug'i bilan */
 #define EXIT_CTRL_C   (-2)      /* Ctrl+C bilan */
 #define EXIT_FAULT    (-11)     /* xato (Segmentation fault) */
+#define EXIT_TTIN     (-21)     /* fon jarayoni klaviaturadan o'qimoqchi bo'ldi */
 
 /* Ishga tushirish: joriy oqim (shell) 1-vazifaga aylanadi, idle yaratiladi */
 void     sched_init(void);
@@ -91,6 +100,10 @@ void     task_unblock(task_t *t);          /* uzilish ichidan chaqirish mumkin *
 task_t  *task_current(void);
 task_t  *task_get(int index);              /* jadvaldagi i-yozuv (ps uchun) */
 uint32_t sched_switch_count(void);
+
+/* FPU (v0.6.1): "lazy" kontekst almashtirish — task.c da tushuntirilgan */
+void     fpu_init(void);
+bool     fpu_handle_nm(registers_t *r);    /* exception #7; false — ishlov berilmadi */
 
 /* Uzilishlar bilan bog'liq (timer.c va idt.c chaqiradi) */
 void         sched_tick(void);

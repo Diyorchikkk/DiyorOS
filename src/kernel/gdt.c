@@ -41,10 +41,23 @@ struct tss_entry {
     uint16_t trap, iomap_base;
 } __attribute__((packed));
 
-static struct gdt_entry gdt[6];
+static struct gdt_entry gdt[7];
 static struct gdt_ptr   gdt_pointer;
 static struct tss_entry tss;
 
+/*
+ * DOUBLE FAULT uchun alohida TSS va stek (v0.6.1).
+ * Kernel steki to'lib ketsa, protsessor exception kadrini stekka yoza olmaydi
+ * -> Double Fault (#8). Uni oddiy usulda ushlab bo'lmaydi: ishlov beruvchi ham
+ * o'sha buzilgan stekni ishlatardi va protsessor butunlay qayta yuklanardi
+ * (triple fault). Yechim — "task gate": #8 bo'lganda protsessor apparat
+ * darajasida BOSHQA vazifaga (boshqa TSS, toza stek) o'tadi. Eski vazifaning
+ * registrlari asosiy TSS ga saqlanadi — xabarda shularni ko'rsatamiz.
+ */
+static struct tss_entry df_tss;
+static uint8_t df_stack[4096] __attribute__((aligned(16)));
+
+void double_fault_entry(void);     /* panic.c */
 extern void gdt_flush(uint32_t);   /* interrupts.s da */
 extern void tss_flush(void);
 
@@ -74,6 +87,18 @@ void gdt_init(void)
     tss.iomap_base = sizeof(tss);            /* I/O ruxsatlar xaritasi yo'q: dastur portlarga tegolmaydi */
     gdt_set(5, (uint32_t)&tss, sizeof(tss) - 1, 0x89, 0x00);   /* 5: TSS */
 
+    memset(&df_tss, 0, sizeof(df_tss));
+    df_tss.eip    = (uint32_t)double_fault_entry;
+    df_tss.esp    = (uint32_t)df_stack + sizeof(df_stack) - 16;
+    df_tss.ebp    = 0;
+    df_tss.eflags = 0x2;                     /* uzilishlar o'chiq */
+    df_tss.cs     = KERNEL_CS;
+    df_tss.ds = df_tss.es = df_tss.fs = df_tss.gs = df_tss.ss = KERNEL_DS;
+    df_tss.ss0    = KERNEL_DS;
+    df_tss.esp0   = df_tss.esp;
+    df_tss.iomap_base = sizeof(df_tss);
+    gdt_set(6, (uint32_t)&df_tss, sizeof(df_tss) - 1, 0x89, 0x00);   /* 6: Double Fault TSS */
+
     gdt_flush((uint32_t)&gdt_pointer);
     tss_flush();                             /* ltr: TSS ni protsessorga yuklash */
 }
@@ -81,4 +106,18 @@ void gdt_init(void)
 void tss_set_kernel_stack(uint32_t esp0)
 {
     tss.esp0 = esp0;
+}
+
+/* Double Fault vazifasi qaysi sahifa jadvali bilan ishlashi (paging yoqilganda) */
+void tss_set_df_cr3(uint32_t cr3)
+{
+    df_tss.cr3 = cr3;
+}
+
+/* Double Fault paytida protsessor asosiy TSS ga saqlagan registrlar */
+void tss_saved_state(uint32_t *eip, uint32_t *esp, uint32_t *ebp)
+{
+    *eip = tss.eip;
+    *esp = tss.esp;
+    *ebp = tss.ebp;
 }

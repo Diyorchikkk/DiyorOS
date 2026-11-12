@@ -11,12 +11,24 @@
  *      qaysi faylga va uning qaysi joyiga (offset) ishora qilishini saqlaydi.
  *
  * VFS o'zi ma'lumot saqlamaydi: haqiqiy ish node->ops orqali fayl
- * tizimiga (ramfs, procfs) topshiriladi.
+ * tizimiga (ramfs, procfs, fat32) topshiriladi.
+ *
+ * SINXRONIZATSIYA (v0.6.1)
+ * VFS ni bir vaqtda bir nechta vazifa ishlatadi: shell (kernel oqimi) va
+ * dasturlar (syscall orqali). Agar shell fayl yaratayotgan paytda taymer
+ * uni to'xtatib, boshqa dastur ham o'sha papkaga fayl qo'shsa, bog'langan
+ * ro'yxat buziladi (race condition). Shuning uchun har bir ochiq (public)
+ * funksiya KRITIK SEKSIYA: uzilishlar o'chiq holda, bo'linmas bajariladi.
+ * Fayl oxiridagi vfs_* funksiyalar — shu "qulf"ni qo'yadigan qobiqlar,
+ * haqiqiy ish *_locked funksiyalarida. v0.8 da uzilishlarni o'chirish
+ * o'rniga mutex ishlatiladi (disk bilan ishlash paytida tizim to'xtab qolmaydi).
  */
 #include "vfs.h"
 #include "string.h"
 #include "kprintf.h"
 #include "task.h"
+#include "irq.h"
+#include "klog.h"
 
 #define MAX_MOUNTS 8
 
@@ -73,7 +85,7 @@ static vfs_node_t *follow_mount(vfs_node_t *n)
  */
 #define HOME_DIR "/home/diyorbek"
 
-int vfs_lookup(const char *path, vfs_node_t **out)
+static int lookup_locked(const char *path, vfs_node_t **out)
 {
     if (!path)
         return VFS_EINVAL;
@@ -178,7 +190,7 @@ const char *vfs_basename(const char *path)
 }
 
 /* Tugundan ildizgacha yurib, to'liq yo'lni tuzish: "/home/diyorbek" */
-int vfs_get_path(vfs_node_t *node, char *buf, uint32_t size)
+static int get_path_locked(vfs_node_t *node, char *buf, uint32_t size)
 {
     if (node == root) {
         ksnprintf(buf, size, "/");
@@ -227,7 +239,7 @@ vfs_node_t *vfs_root(void) { return root; }
 vfs_node_t *vfs_cwd(void)  { return cwd; }
 
 /* fs_root ni path papkasiga ulash */
-int vfs_mount(const char *path, vfs_node_t *fs_root)
+static int mount_locked(const char *path, vfs_node_t *fs_root)
 {
     vfs_node_t *dir;
     int err = vfs_lookup(path, &dir);
@@ -240,16 +252,17 @@ int vfs_mount(const char *path, vfs_node_t *fs_root)
 
     dir->mount = fs_root;
     fs_root->parent = dir->parent;          /* ".." ulangan fayl tizimidan tashqariga chiqadi */
-    strncpy(fs_root->name, dir->name, VFS_NAME_MAX - 1);
+    strlcpy(fs_root->name, dir->name, VFS_NAME_MAX);
 
     vfs_get_path(dir, mounts[mount_count].path, VFS_PATH_MAX);
     mounts[mount_count].fs_root = fs_root;
     mount_count++;
+    klog("vfs: %s -> %s ulandi", fs_root->fs_name, mounts[mount_count - 1].path);
     return VFS_OK;
 }
 
 /* Fayl tizimini uzish: ochiq fayl yoki joriy papka uning ichida bo'lmasligi kerak */
-int vfs_unmount(const char *path)
+static int unmount_locked(const char *path)
 {
     vfs_node_t *dir;
     int err = vfs_lookup(path, &dir);
@@ -289,6 +302,7 @@ int vfs_unmount(const char *path)
         mounts[i] = mounts[i + 1];
     mount_count--;
 
+    klog("vfs: %s uzildi", mp);
     if (dir->ops->unmount)
         dir->ops->unmount(dir);
     return VFS_OK;
@@ -303,7 +317,7 @@ int vfs_mount_info(int i, const char **path, const char **fs_name)
     return VFS_OK;
 }
 
-int vfs_chdir(const char *path)
+static int chdir_locked(const char *path)
 {
     vfs_node_t *n;
     int err = vfs_lookup(path, &n);
@@ -333,7 +347,7 @@ static int create_node(const char *path, vfs_type_t type, vfs_node_t **out)
     return dir->ops->create(dir, name, type, out);
 }
 
-int vfs_mkmountpoint(const char *path)
+static int mkmountpoint_locked(const char *path)
 {
     vfs_node_t *n;
     int err = create_node(path, VFS_DIR, &n);
@@ -342,13 +356,13 @@ int vfs_mkmountpoint(const char *path)
     return err;
 }
 
-int vfs_mkdir(const char *path)
+static int mkdir_locked(const char *path)
 {
     vfs_node_t *n;
     return create_node(path, VFS_DIR, &n);
 }
 
-int vfs_create(const char *path, vfs_node_t **out)
+static int create_locked(const char *path, vfs_node_t **out)
 {
     vfs_node_t *n;
     int err = create_node(path, VFS_FILE, &n);
@@ -357,18 +371,18 @@ int vfs_create(const char *path, vfs_node_t **out)
     return err;
 }
 
-vfs_node_t *vfs_readdir(vfs_node_t *dir, uint32_t index)
+static vfs_node_t *readdir_locked(vfs_node_t *dir, uint32_t index)
 {
     dir = follow_mount(dir);
-    if (dir->type != VFS_DIR || !dir->ops->readdir)
+    if (!dir || dir->type != VFS_DIR || !dir->ops->readdir)
         return 0;
     return dir->ops->readdir(dir, index);
 }
 
 static int remove_node(vfs_node_t *n, bool recursive)
 {
-    if (n == root || n->mount)
-        return VFS_EBUSY;                    /* ildiz yoki mount nuqtasi */
+    if (n == root || n->mount || n->mountpoint)
+        return VFS_EBUSY;                    /* ildiz yoki mount nuqtasi (/disk) */
     for (int i = 0; i < mount_count; i++)
         if (mounts[i].fs_root == n)
             return VFS_EBUSY;                /* ulangan fayl tizimining ildizi */
@@ -394,7 +408,7 @@ static int remove_node(vfs_node_t *n, bool recursive)
     return parent->ops->unlink(parent, n);
 }
 
-int vfs_remove(const char *path, bool recursive)
+static int remove_locked(const char *path, bool recursive)
 {
     vfs_node_t *n;
     int err = vfs_lookup(path, &n);
@@ -404,13 +418,13 @@ int vfs_remove(const char *path, bool recursive)
 }
 
 /* mv: nomini o'zgartirish yoki boshqa papkaga ko'chirish */
-int vfs_rename(const char *from, const char *to)
+static int rename_locked(const char *from, const char *to)
 {
     vfs_node_t *src;
     int err = vfs_lookup(from, &src);
     if (err)
         return err;
-    if (src == root || src->mount)
+    if (src == root || src->mount || src->mountpoint)
         return VFS_EBUSY;
     for (int i = 0; i < mount_count; i++)
         if (mounts[i].fs_root == src)
@@ -433,6 +447,8 @@ int vfs_rename(const char *from, const char *to)
             return err;
     }
 
+    if (dst_dir->mountpoint && !dst_dir->mount)
+        return VFS_ENODEV;                   /* ulanmagan /disk ichiga ko'chirib bo'lmaydi */
     if (dst_dir->ops != src->ops)
         return VFS_EXDEV;                    /* boshqa fayl tizimiga ko'chirib bo'lmaydi */
     if (!src->ops->rename)
@@ -452,7 +468,7 @@ static vfs_fd_t *get_fd(int fd)
     return &fds[fd];
 }
 
-int vfs_open(const char *path, uint32_t flags)
+static int open_locked(const char *path, uint32_t flags)
 {
     vfs_node_t *n;
     int err = vfs_lookup(path, &n);
@@ -463,6 +479,8 @@ int vfs_open(const char *path, uint32_t flags)
         return err;
     if (n->type == VFS_DIR)
         return VFS_EISDIR;
+    if (!(flags & (VFS_O_READ | VFS_O_WRITE)))
+        return VFS_EINVAL;                   /* na o'qish, na yozish so'ralgan */
     if ((flags & VFS_O_WRITE) && !n->ops->write)
         return VFS_EROFS;
 
@@ -490,7 +508,7 @@ int vfs_open(const char *path, uint32_t flags)
     return fd;
 }
 
-int32_t vfs_read(int fd, void *buf, uint32_t len)
+static int32_t read_locked(int fd, void *buf, uint32_t len)
 {
     vfs_fd_t *f = get_fd(fd);
     if (!f || !(f->flags & VFS_O_READ))
@@ -503,7 +521,7 @@ int32_t vfs_read(int fd, void *buf, uint32_t len)
     return n;
 }
 
-int32_t vfs_write(int fd, const void *buf, uint32_t len)
+static int32_t write_locked(int fd, const void *buf, uint32_t len)
 {
     vfs_fd_t *f = get_fd(fd);
     if (!f || !(f->flags & VFS_O_WRITE))
@@ -516,7 +534,7 @@ int32_t vfs_write(int fd, const void *buf, uint32_t len)
     return n;
 }
 
-int vfs_seek(int fd, uint32_t offset)
+static int seek_locked(int fd, uint32_t offset)
 {
     vfs_fd_t *f = get_fd(fd);
     if (!f)
@@ -525,7 +543,7 @@ int vfs_seek(int fd, uint32_t offset)
     return VFS_OK;
 }
 
-int vfs_close(int fd)
+static int close_locked(int fd)
 {
     vfs_fd_t *f = get_fd(fd);
     if (!f)
@@ -546,11 +564,118 @@ bool vfs_fd_owned(int fd, uint32_t pid)
     return f && f->owner == pid;
 }
 
-void vfs_close_owner(uint32_t pid)
+static void close_owner_locked(uint32_t pid)
 {
     for (int i = 0; i < VFS_MAX_FDS; i++)
         if (fds[i].node && fds[i].owner == pid)
             vfs_close(i);
+}
+
+/* ----------------------- Ochiq funksiyalar: kritik seksiya ----------------------- */
+/*
+ * Har bir vfs_* funksiya uzilishlarni o'chirib, ishni *_locked ga topshiradi va
+ * avvalgi holatni qaytaradi. Ichma-ich chaqiruvlar xavfsiz: irq_restore faqat
+ * eng tashqi chaqiruvda uzilishlarni qayta yoqadi.
+ */
+#define VFS_CALL(type, call) do { uint32_t f_ = irq_save(); type r_ = (call); irq_restore(f_); return r_; } while (0)
+
+int vfs_lookup(const char *path, vfs_node_t **out)
+{
+    VFS_CALL(int, lookup_locked(path, out));
+}
+
+int vfs_get_path(vfs_node_t *node, char *buf, uint32_t size)
+{
+    VFS_CALL(int, get_path_locked(node, buf, size));
+}
+
+int vfs_mount(const char *path, vfs_node_t *fs_root)
+{
+    VFS_CALL(int, mount_locked(path, fs_root));
+}
+
+int vfs_unmount(const char *path)
+{
+    VFS_CALL(int, unmount_locked(path));
+}
+
+int vfs_chdir(const char *path)
+{
+    VFS_CALL(int, chdir_locked(path));
+}
+
+int vfs_mkmountpoint(const char *path)
+{
+    VFS_CALL(int, mkmountpoint_locked(path));
+}
+
+int vfs_mkdir(const char *path)
+{
+    VFS_CALL(int, mkdir_locked(path));
+}
+
+int vfs_create(const char *path, vfs_node_t **out)
+{
+    VFS_CALL(int, create_locked(path, out));
+}
+
+vfs_node_t *vfs_readdir(vfs_node_t *dir, uint32_t index)
+{
+    VFS_CALL(vfs_node_t *, readdir_locked(dir, index));
+}
+
+int vfs_remove(const char *path, bool recursive)
+{
+    VFS_CALL(int, remove_locked(path, recursive));
+}
+
+int vfs_rename(const char *from, const char *to)
+{
+    VFS_CALL(int, rename_locked(from, to));
+}
+
+int vfs_open(const char *path, uint32_t flags)
+{
+    VFS_CALL(int, open_locked(path, flags));
+}
+
+int32_t vfs_read(int fd, void *buf, uint32_t len)
+{
+    VFS_CALL(int32_t, read_locked(fd, buf, len));
+}
+
+int32_t vfs_write(int fd, const void *buf, uint32_t len)
+{
+    VFS_CALL(int32_t, write_locked(fd, buf, len));
+}
+
+int vfs_seek(int fd, uint32_t offset)
+{
+    VFS_CALL(int, seek_locked(fd, offset));
+}
+
+int vfs_close(int fd)
+{
+    VFS_CALL(int, close_locked(fd));
+}
+
+void vfs_close_owner(uint32_t pid)
+{
+    uint32_t f_ = irq_save();
+    close_owner_locked(pid);
+    irq_restore(f_);
+}
+
+/* pid jarayoni nechta fayl ochgan (har bir dasturga chegara qo'yish uchun) */
+int vfs_fd_count(uint32_t pid)
+{
+    uint32_t f_ = irq_save();
+    int count = 0;
+    for (int i = 0; i < VFS_MAX_FDS; i++)
+        if (fds[i].node && fds[i].owner == pid)
+            count++;
+    irq_restore(f_);
+    return count;
 }
 
 const char *vfs_strerror(int err)

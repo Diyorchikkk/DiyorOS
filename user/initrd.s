@@ -1,7 +1,7 @@
 # =====================================================================
 #  initrd.s — dasturlarni kernel fayliga "yopishtirish".
 #
-#  Diskimiz hali yo'q (v0.6), shuning uchun yig'ilgan dasturlar (ELF fayllar)
+#  Tizim hali diskdan yuklanmaydi, shuning uchun yig'ilgan dasturlar (ELF fayllar)
 #  .incbin bilan kernel ichiga joylanadi. Yuklanishda kernel ularni
 #  /bin papkasiga oddiy fayl sifatida yozadi (process.c: initrd_install).
 #
@@ -34,6 +34,7 @@ initrd_table:
     ENTRY hack
     ENTRY isolate
     ENTRY kundalik
+    ENTRY pi
     .long 0, 0, 0              # ro'yxat oxiri
 
     BLOB hello
@@ -42,5 +43,6 @@ initrd_table:
     BLOB hack
     BLOB isolate
     BLOB kundalik
+    BLOB pi
 
 .section .note.GNU-stack, "", @progbits

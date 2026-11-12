@@ -279,6 +279,16 @@ void cmd_cp(const char *args)
                   dst[len - 1] == '/' ? "" : "/", vfs_basename(src));
     }
 
+    /* "cp a a": nusxa ochilganda fayl tozalanadi (O_TRUNC) — manba ham yo'qolardi */
+    vfs_node_t *sn, *dn;
+    if (vfs_lookup(src, &sn) == VFS_OK && vfs_lookup(dst, &dn) == VFS_OK && sn == dn) {
+        save_color();
+        with_color(VGA_LIGHT_RED);
+        kprintf("cp: manba va nusxa bitta fayl\n");
+        restore_color();
+        return;
+    }
+
     int in = vfs_open(src, VFS_O_READ);
     if (in < 0) {
         fs_error("cp", src, in);
@@ -295,13 +305,19 @@ void cmd_cp(const char *args)
     int32_t n;
     uint32_t total = 0;
     while ((n = vfs_read(in, buf, sizeof(buf))) > 0) {
-        int32_t w = vfs_write(out, buf, n);
+        int32_t w = vfs_write(out, buf, (uint32_t)n);
         if (w < 0) {
             fs_error("cp", dst, w);
             break;
         }
-        total += w;
+        total += (uint32_t)w;
+        if (w < n) {                         /* qisman yozildi: diskda joy tugadi */
+            fs_error("cp", dst, VFS_ENOSPC);
+            break;
+        }
     }
+    if (n < 0)
+        fs_error("cp", src, n);
     vfs_close(in);
     vfs_close(out);
     kprintf("%u bayt nusxalandi\n", total);

@@ -11,10 +11,15 @@
  *
  * Boshlanishda hammasini BAND deb belgilaymiz, keyin xaritadagi bo'sh joylarni
  * bo'shatamiz, so'ng birinchi 1 MB va kernelning o'zini qayta band qilamiz.
+ *
+ * v0.6.1: frame ajratish va qaytarish uzilishlarsiz bajariladi. Aks holda
+ * shell (dastur yuklayotganda) va boshqa jarayon (sbrk) bir vaqtda bitta
+ * frame ni olib qo'yishi mumkin edi (race condition).
  */
 #include "memory.h"
 #include "kernel.h"
 #include "string.h"
+#include "irq.h"
 
 #define MAX_MEMORY   0x40000000u                  /* 1 GB gacha qo'llab-quvvatlaymiz */
 #define MAX_FRAMES   (MAX_MEMORY / PAGE_SIZE)
@@ -81,6 +86,8 @@ void pmm_init(multiboot_info_t *mbi)
                 if (top > memory_top)
                     memory_top = (uint32_t)top;
             }
+            if (e->size < 20)
+                break;                             /* buzilgan xarita: cheksiz tsiklga tushmaymiz */
             addr += e->size + 4;                   /* keyingi yozuvga o'tish */
         }
     } else {
@@ -103,6 +110,8 @@ void pmm_init(multiboot_info_t *mbi)
 
 uint32_t pmm_alloc_frame(void)
 {
+    uint32_t flags = irq_save();
+    uint32_t result = 0;                           /* 0 — xotira tugadi */
     for (uint32_t i = 0; i < total_frames; i++) {
         uint32_t f = (search_hint + i) % total_frames;
         if (bitmap[f / 32] == 0xFFFFFFFF) {        /* 32 ta frame birdan band — tez o'tkazib yuboramiz */
@@ -113,21 +122,25 @@ uint32_t pmm_alloc_frame(void)
             frame_set(f);
             used_frames++;
             search_hint = f + 1;
-            return f * PAGE_SIZE;
+            result = f * PAGE_SIZE;
+            break;
         }
     }
-    return 0;                                      /* xotira tugadi */
+    irq_restore(flags);
+    return result;
 }
 
 void pmm_free_frame(uint32_t addr)
 {
     uint32_t f = addr / PAGE_SIZE;
-    if (f >= total_frames || !frame_test(f))
-        return;                                    /* allaqachon bo'sh — e'tiborsiz qoldiramiz */
-    frame_clear(f);
-    used_frames--;
-    if (f < search_hint)
-        search_hint = f;
+    uint32_t flags = irq_save();
+    if (f < total_frames && frame_test(f)) {       /* allaqachon bo'sh bo'lsa — e'tiborsiz qoldiramiz */
+        frame_clear(f);
+        used_frames--;
+        if (f < search_hint)
+            search_hint = f;
+    }
+    irq_restore(flags);
 }
 
 uint32_t pmm_total_frames(void)  { return total_frames; }

@@ -18,9 +18,12 @@
 #include "vfs.h"
 #include "task.h"
 #include "process.h"
+#include "klog.h"
+#include "irq.h"
+#include "memory.h"
 
 #define LINE_MAX    256
-#define HISTORY_MAX 10
+#define HISTORY_MAX 32
 
 static char history[HISTORY_MAX][LINE_MAX];
 static int  history_count = 0;
@@ -51,10 +54,14 @@ static bool parse_int(const char **p, int32_t *out)
     }
     if (*s < '0' || *s > '9')
         return false;
-    int32_t v = 0;
-    while (*s >= '0' && *s <= '9')
-        v = v * 10 + (*s++ - '0');
-    *out = neg ? -v : v;
+    uint32_t v = 0, limit = neg ? 0x80000000u : 0x7FFFFFFFu;
+    while (*s >= '0' && *s <= '9') {
+        uint32_t d = (uint32_t)(*s++ - '0');
+        if (v > (limit - d) / 10)
+            return false;               /* 32 bitga sig'maydigan son */
+        v = v * 10 + d;
+    }
+    *out = neg ? (int32_t)(0u - v) : (int32_t)v;
     *p = s;
     return true;
 }
@@ -98,11 +105,72 @@ static void prompt(void)
 
 static void tab_complete(char *buf, int *len);
 
-/* Klaviaturadan bitta qator o'qish: backspace va tarix (yuqori/pastki strelka) bilan */
+/*
+ * QATOR TAHRIRI (v0.6.1)
+ * Kursorni qator ichida yurgizish va o'rtasiga yozish uchun qatorning ekrandagi
+ * boshlanish joyini bilish kerak. Ekran katakchalarini 0 dan boshlab sanaymiz:
+ * joy = qator * 80 + ustun ("chiziqli" koordinata). Shunda uzun qator keyingi
+ * satrga o'tib ketsa ham hisob oddiy qo'shish bo'lib qoladi:
+ *     kursor joyi = origin + pos
+ * Qatorni qayta chizganda ekran pastga yetib suriladigan (scroll) bo'lsa,
+ * origin ham shuncha qatorga yuqoriga suriladi.
+ */
+typedef struct {
+    char *buf;
+    int   len;          /* qatordagi belgilar soni */
+    int   pos;          /* kursor: 0..len */
+    int   origin;       /* birinchi belgining ekrandagi chiziqli joyi */
+} line_t;
+
+static int cursor_linear(void)
+{
+    int x, y;
+    vga_get_cursor(&x, &y);
+    return y * VGA_WIDTH + x;
+}
+
+static void cursor_to(int linear)
+{
+    vga_set_cursor(linear % VGA_WIDTH, linear / VGA_WIDTH);
+}
+
+/* Qatorni qayta chizish. old_len — avvalgi uzunlik (qisqargan bo'lsa, ortig'i o'chiriladi) */
+static void line_redraw(line_t *l, int old_len)
+{
+    cursor_to(l->origin);
+    int printed = 0;
+    for (; printed < l->len; printed++)
+        vga_putc_local(l->buf[printed]);
+    for (; printed < old_len; printed++)
+        vga_putc_local(' ');
+    /* Ekran surilgan bo'lsa, kursor kutilganidan yuqorida turadi */
+    l->origin -= l->origin + printed - cursor_linear();
+    cursor_to(l->origin + l->pos);
+}
+
+static void line_set(line_t *l, const char *text)
+{
+    int old = l->len;
+    strlcpy(l->buf, text, LINE_MAX);
+    l->len = l->pos = (int)strlen(l->buf);
+    line_redraw(l, old);
+}
+
+/*
+ * Klaviaturadan bitta qator o'qish.
+ *   chap/o'ng strelka, Home/End (Ctrl+A / Ctrl+E)  kursorni yurgizish
+ *   Backspace, Delete (Ctrl+D)                    belgini o'chirish
+ *   Ctrl+K / Ctrl+U                               kursordan oxirigacha / butun qatorni o'chirish
+ *   yuqori/pastki strelka                         buyruqlar tarixi
+ *   Tab                                           to'ldirish
+ *   Ctrl+L                                        ekranni tozalash
+ *   Ctrl+C                                        qatorni bekor qilish
+ */
 static void read_line(char *buf)
 {
-    int len = 0;
+    line_t l = { buf, 0, 0, cursor_linear() };
     int hpos = history_count;
+    buf[0] = 0;
 
     for (;;) {
         char c = keyboard_getchar();
@@ -113,18 +181,6 @@ static void read_line(char *buf)
             vga_scroll_view(-vga_view_offset());
             status_bar_refresh();
         }
-        if (c == '\n') {
-            vga_putc('\n');
-            buf[len] = 0;
-            return;
-        }
-        if (c == '\b') {
-            if (len > 0) {
-                len--;
-                vga_putc('\b');
-            }
-            continue;
-        }
         if (scroll_key) {
             int page = VGA_HEIGHT - 2;   /* bir sahifa: 23 qator */
             if (c == KEY_PGUP)        vga_scroll_view(page);
@@ -134,40 +190,110 @@ static void read_line(char *buf)
             status_bar_refresh();
             continue;
         }
-        if (c == KEY_UP || c == KEY_DOWN) {
+
+        int old = l.len;
+        switch (c) {
+        case '\n':
+            cursor_to(l.origin + l.len);
+            vga_putc_local('\n');
+            buf[l.len] = 0;
+            serial_puts(buf);               /* tahrirlash ekranda bo'ldi; serialga tayyor qator */
+            serial_putc('\n');
+            return;
+
+        case '\b':
+            if (l.pos > 0) {
+                memmove(buf + l.pos - 1, buf + l.pos, (size_t)(l.len - l.pos));
+                l.pos--;
+                l.len--;
+                line_redraw(&l, old);
+            }
+            break;
+
+        case KEY_DELETE:
+            if (l.pos < l.len) {
+                memmove(buf + l.pos, buf + l.pos + 1, (size_t)(l.len - l.pos - 1));
+                l.len--;
+                line_redraw(&l, old);
+            }
+            break;
+
+        case KEY_LEFT:
+            if (l.pos > 0)
+                cursor_to(l.origin + --l.pos);
+            break;
+
+        case KEY_RIGHT:
+            if (l.pos < l.len)
+                cursor_to(l.origin + ++l.pos);
+            break;
+
+        case KEY_HOME:
+            l.pos = 0;
+            cursor_to(l.origin);
+            break;
+
+        case KEY_END:
+            l.pos = l.len;
+            cursor_to(l.origin + l.pos);
+            break;
+
+        case KEY_CTRL_K:                    /* kursordan oxirigacha o'chirish */
+            l.len = l.pos;
+            line_redraw(&l, old);
+            break;
+
+        case KEY_CTRL_U:                    /* butun qatorni o'chirish */
+            l.len = l.pos = 0;
+            line_redraw(&l, old);
+            break;
+
+        case KEY_CTRL_L:                    /* ekranni tozalab, qatorni qayta ko'rsatish */
+            vga_clear();
+            prompt();
+            l.origin = cursor_linear();
+            line_redraw(&l, 0);
+            break;
+
+        case KEY_UP:
+        case KEY_DOWN:
             if (c == KEY_UP && hpos > 0)
                 hpos--;
             else if (c == KEY_DOWN && hpos < history_count)
                 hpos++;
             else
-                continue;
-            while (len > 0) {           /* joriy yozilganni o'chiramiz */
-                vga_putc('\b');
-                len--;
-            }
-            if (hpos < history_count) {
-                strcpy(buf, history[hpos]);
-                len = strlen(buf);
-                vga_puts(buf);
-            }
-            continue;
-        }
-        if (c == KEY_CTRL_C) {          /* Ctrl+C: qatorni bekor qilish */
+                break;
+            line_set(&l, hpos < history_count ? history[hpos] : "");
+            break;
+
+        case KEY_CTRL_C:                    /* qatorni bekor qilish */
+            cursor_to(l.origin + l.len);
             kprintf("^C\n");
-            len = 0;
+            l.len = l.pos = 0;
             buf[0] = 0;
             hpos = history_count;
             prompt();
-            continue;
-        }
-        if (c == '\t') {
-            buf[len] = 0;
-            tab_complete(buf, &len);
-            continue;
-        }
-        if (c >= 32 && c < 127 && len < LINE_MAX - 1) {
-            buf[len++] = c;
-            vga_putc(c);
+            l.origin = cursor_linear();
+            break;
+
+        case '\t':
+            /* To'ldirish qator oxirida ishlaydi: kursorni o'sha yerga olib boramiz */
+            l.pos = l.len;
+            cursor_to(l.origin + l.len);
+            buf[l.len] = 0;
+            tab_complete(buf, &l.len);
+            l.pos = l.len;
+            l.origin = cursor_linear() - l.len;   /* variantlar chiqqan bo'lsa, qator pastga ko'chgan */
+            break;
+
+        default:
+            if (c >= 32 && c < 127 && l.len < LINE_MAX - 1) {
+                memmove(buf + l.pos + 1, buf + l.pos, (size_t)(l.len - l.pos));
+                buf[l.pos++] = c;
+                l.len++;
+                line_redraw(&l, old);
+            }
+            break;
         }
     }
 }
@@ -240,10 +366,13 @@ static void cmd_calc(const char *args)
     char op = *p++;
     if (!parse_int(&p, &b)) goto usage;
 
+    /* Natija 32 bitga sig'ishini 64-bitli oraliq qiymat bilan tekshiramiz.
+       (-2147483648 / -1 protsessorda exception beradi — kalkulyator kernelni qulatmasligi kerak) */
+    int64_t r;
     switch (op) {
-    case '+': kprintf("= %d\n", a + b); return;
-    case '-': kprintf("= %d\n", a - b); return;
-    case '*': kprintf("= %d\n", a * b); return;
+    case '+': r = (int64_t)a + b; break;
+    case '-': r = (int64_t)a - b; break;
+    case '*': r = (int64_t)a * b; break;
     case '/':
     case '%':
         if (b == 0) {
@@ -252,9 +381,22 @@ static void cmd_calc(const char *args)
             normal();
             return;
         }
-        kprintf("= %d\n", op == '/' ? a / b : a % b);
+        if (b == -1)
+            r = (op == '/') ? -(int64_t)a : 0;
+        else
+            r = (op == '/') ? a / b : a % b;
+        break;
+    default:
+        goto usage;
+    }
+    if (r > 0x7FFFFFFFLL || r < -0x80000000LL) {
+        vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+        kprintf("Xato: natija 32 bitli songa sig'maydi\n");
+        normal();
         return;
     }
+    kprintf("= %d\n", (int32_t)r);
+    return;
 usage:
     kprintf("Foydalanish: calc <son> <+ - * / %%> <son>   masalan: calc 12 * 7\n");
 }
@@ -265,7 +407,7 @@ static void cmd_color(const char *args)
     int32_t c;
     if (!parse_int(&p, &c) || c < 1 || c > 15) {
         kprintf("Foydalanish: color <1-15>\n");
-        for (int i = 1; i < 16; i++) {
+        for (uint8_t i = 1; i < 16; i++) {
             vga_set_color(i, VGA_BLACK);
             kprintf("%d ", i);
         }
@@ -298,20 +440,79 @@ static void cmd_sleep(const char *args)
     kprintf("Tayyor.\n");
 }
 
-/* Ataylab 0 ga bo'lib, exception (uzilish) qanday ushlanishini ko'rsatadi */
+/* Cheksiz rekursiya: har chaqiruvda stekdan ~512 bayt oladi (ataylab — sinov uchun) */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpragmas"
+#pragma GCC diagnostic ignored "-Winfinite-recursion"
+static volatile bool eat_yield;
+static uint32_t __attribute__((noinline)) eat_stack(uint32_t depth)
+{
+    volatile char pad[480];
+    pad[0] = (char)depth;
+    if (eat_yield)
+        task_yield();                    /* scheduler stekni tekshirib tursin */
+    return eat_stack(depth + 1) + (uint32_t)pad[0];
+}
+#pragma GCC diagnostic pop
+
+static void eat_task(uint32_t arg)
+{
+    eat_yield = true;
+    eat_stack(arg);
+}
+
+/*
+ * Ataylab kernelni qulatish — himoya mexanizmlari qanday ishlashini ko'rsatadi:
+ *   crash         0 ga bo'lish (exception #0)
+ *   crash stack   cheksiz rekursiya: stek qo'riqchi sahifaga yetadi -> Double Fault
+ *   crash canary  fon oqimida rekursiya: scheduler stek tubidagi belgini tekshirib ushlaydi
+ *   crash heap    ajratilgan blokdan tashqariga yozish: heap tekshiruvi ushlaydi
+ */
 static void cmd_crash(const char *args)
 {
-    (void)args;
+    if (strcmp(args, "stack") == 0) {
+        kprintf("Cheksiz rekursiya... (Double Fault kutilmoqda)\n");
+        eat_yield = false;
+        eat_stack(1);
+        return;
+    }
+    if (strcmp(args, "canary") == 0) {
+        kprintf("Fon oqimida rekursiya... (stek qo'riqchisi kutilmoqda)\n");
+        task_create("stackeat", eat_task, 1);
+        return;
+    }
+    if (strcmp(args, "heap") == 0) {
+        kprintf("16 baytli blokka 64 bayt yozish... (heap tekshiruvi kutilmoqda)\n");
+        volatile char *p = kmalloc(16);
+        for (int i = 0; i < 64; i++)
+            p[i] = 'X';                  /* qo'shni blok sarlavhasi buziladi */
+        kfree(kmalloc(8));               /* keyingi kmalloc ro'yxat bo'ylab yurib, buzilishni topadi */
+        return;
+    }
     kprintf("0 ga bo'lish sinovi... (Exception #0 kutilmoqda)\n");
     volatile int a = 1, b = 0;
     a = a / b;
+}
+
+/* Kernel jurnali: yuklanishdan beri nima bo'lgani (klog.c) */
+static void cmd_dmesg(const char *args)
+{
+    (void)args;
+    char chunk[128];
+    uint32_t off = 0, n;
+    while ((n = klog_read(off, chunk, sizeof(chunk))) > 0) {
+        for (uint32_t i = 0; i < n; i++)
+            vga_putc_local(chunk[i]);        /* jurnal serial portga allaqachon chiqqan */
+        off += n;
+    }
 }
 
 static void cmd_reboot(const char *args)
 {
     (void)args;
     kprintf("Qayta yuklanmoqda...\n");
-    while (inb(0x64) & 0x02)     /* klaviatura kontrolleri tayyor bo'lguncha */
+    klog("reboot buyrug'i");
+    for (int i = 0; i < 100000 && (inb(0x64) & 0x02); i++)   /* klaviatura kontrolleri tayyor bo'lguncha */
         ;
     outb(0x64, 0xFE);            /* CPU ga reset signali */
     for (;;)
@@ -322,6 +523,9 @@ static void cmd_shutdown(const char *args)
 {
     (void)args;
     kprintf("Tizim o'chirilmoqda...\n");
+    klog("shutdown buyrug'i");
+    vfs_chdir("/");
+    vfs_unmount("/disk");        /* disk toza uziladi: FSInfo ga bo'sh joy soni yoziladi */
     outw(0x604, 0x2000);         /* QEMU (yangi versiyalar) ACPI o'chirish porti */
     outw(0xB004, 0x2000);        /* Bochs / eski QEMU */
     __asm__ volatile ("cli");
@@ -390,8 +594,9 @@ static const command_t commands[] = {
     { "kill",      CAT_TASKS,   "Vazifani to'xtatish: kill 3",                     cmd_kill      },
     { "sched",     CAT_TASKS,   "Scheduler statistikasi",                          cmd_sched     },
 
-    { "crash",     CAT_SYSTEM,  "Exception sinovi (0 ga bo'lish)",                 cmd_crash     },
-    { "pagefault", CAT_SYSTEM,  "Page Fault sinovi: pagefault | pagefault null",   cmd_pagefault },
+    { "dmesg",     CAT_SYSTEM,  "Kernel jurnali (yuklanishdan beri xabarlar)",     cmd_dmesg     },
+    { "crash",     CAT_SYSTEM,  "Panic sinovi: crash | stack | canary | heap",    cmd_crash     },
+    { "pagefault", CAT_SYSTEM,  "Page Fault sinovi: pagefault | null | kod",       cmd_pagefault },
     { "reboot",    CAT_SYSTEM,  "Qayta yuklash",                                   cmd_reboot    },
     { "shutdown",  CAT_SYSTEM,  "O'chirish",                                       cmd_shutdown  },
 };
@@ -448,9 +653,8 @@ static void cmd_help(const char *args)
         for (uint32_t i = 0; (c = vfs_readdir(bin, i)); i++)
             kprintf(" %s", c->name);
     normal();
-    kprintf("  (fonda: nom &, to'xtatish: Ctrl+C)\n");
-    kprintf("Batafsil: help <buyruq>.  Tab - to'ldirish, strelkalar - tarix,\n");
-    kprintf("sichqoncha g'ildiragi / Fn+strelka - ekranni varaqlash.\n");
+    kprintf("\nBatafsil: help <buyruq>.  Dasturni fonda ishlatish: nom &   To'xtatish: Ctrl+C\n");
+    kprintf("Tab - to'ldirish, strelkalar - tarix va qator tahriri, g'ildirak - varaqlash.\n");
 }
 
 /* --------------------------- Tab bilan to'ldirish --------------------------- */
@@ -460,7 +664,8 @@ static void cmd_help(const char *args)
 static void show_line_again(const char *buf)
 {
     prompt();
-    vga_puts(buf);
+    while (*buf)
+        vga_putc_local(*buf++);
 }
 
 /*
@@ -542,17 +747,17 @@ static void tab_complete(char *buf, int *len)
     for (int j = plen; j < common && *len < LINE_MAX - 3; j++) {
         if (names[0][j] == ' ') {               /* bo'sh joy -> "\ " */
             buf[(*len)++] = '\\';
-            vga_putc('\\');
+            vga_putc_local('\\');
         }
         buf[(*len)++] = names[0][j];
-        vga_putc(names[0][j]);
+        vga_putc_local(names[0][j]);
     }
 
     if (count == 1) {                           /* yagona variant: "/" yoki bo'sh joy qo'shamiz */
         char tail = is_dir[0] ? '/' : ' ';
         if (*len < LINE_MAX - 2) {
             buf[(*len)++] = tail;
-            vga_putc(tail);
+            vga_putc_local(tail);
         }
     } else if (common == plen) {                /* umumiy qism yo'q: variantlarni ko'rsatamiz */
         kprintf("\n");
@@ -606,7 +811,13 @@ static bool run_program(const char *cmd, char *args)
     }
 
     task_reap();
+    /* Yaratish va "oldingi plan" deb belgilash bo'linmas: aks holda dastur
+       belgilanmasdan oldin ishlab ketib, klaviaturadan o'qiy olmay qolishi mumkin edi */
+    uint32_t flags = irq_save();
     int32_t pid = process_spawn(path, args);
+    if (pid > 0 && !background)
+        task_set_foreground((uint32_t)pid);
+    irq_restore(flags);
     if (pid < 0) {
         vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
         kprintf("%s: %s\n", cmd, process_strerror(pid));
@@ -620,7 +831,6 @@ static bool run_program(const char *cmd, char *args)
     }
 
     /* Oldingi plan: shell dastur tugashini kutadi (BLOCKED). Ctrl+C uni to'xtatadi */
-    task_set_foreground((uint32_t)pid);
     int32_t code = task_wait((uint32_t)pid);
     task_set_foreground(0);
     task_reap_pid((uint32_t)pid);
@@ -643,9 +853,11 @@ static void report_finished(void)
         task_t *t = task_get(i);
         if (t->state != TASK_ZOMBIE || !t->user || t->pid == task_foreground())
             continue;
-        vga_set_color(VGA_DARK_GREY, VGA_BLACK);
-        kprintf("[PID %u] %s tugadi (kod %d)\n", t->pid, t->name, t->exit_code);
-        normal();
+        if (t->exit_code != EXIT_TTIN) {     /* bu holatda xabar allaqachon chiqarilgan */
+            vga_set_color(VGA_DARK_GREY, VGA_BLACK);
+            kprintf("[PID %u] %s tugadi (kod %d)\n", t->pid, t->name, t->exit_code);
+            normal();
+        }
         task_reap_pid(t->pid);
     }
 }

@@ -13,11 +13,18 @@
  * qatorlarni yo'qotmaslik uchun ularni alohida "scrollback" buferga
  * (aylanma bufer, 500 qator) saqlaymiz. Foydalanuvchi yuqoriga varaqlasa,
  * ekranga shu buferdan qatorlarni chizamiz.
+ *
+ * v0.6.1:
+ *   - Ekranga bir nechta vazifa yozadi (shell, dasturlar, uzilishlar), shuning
+ *     uchun holatni o'zgartiradigan har bir funksiya kritik seksiya.
+ *   - Chiqarilgan har bir belgi serial portga ham yuboriladi (konsol nusxasi).
+ *   - Kursorni o'qish/o'rnatish: shell qatorni o'rtasidan tahrirlashi uchun.
  */
 #include "vga.h"
 #include "io.h"
 #include "string.h"
 #include "irq.h"
+#include "klog.h"
 
 #define TEXT_TOP   1                        /* 0-qator — status bar */
 #define TEXT_ROWS  (VGA_HEIGHT - TEXT_TOP)  /* matn uchun 24 qator */
@@ -49,7 +56,7 @@ static inline uint16_t *screen_row(int row)
 /* Ekrandagi miltillovchi kursorni yangilash (VGA controller portlari orqali) */
 static void update_hw_cursor(void)
 {
-    uint16_t pos = cursor_row * VGA_WIDTH + cursor_col;
+    uint16_t pos = (uint16_t)(cursor_row * VGA_WIDTH + cursor_col);
     outb(0x3D4, 0x0F);
     outb(0x3D5, (uint8_t)(pos & 0xFF));
     outb(0x3D4, 0x0E);
@@ -100,7 +107,7 @@ static void render_view(void)
     }
 }
 
-void vga_scroll_view(int delta)
+static void scroll_view_locked(int delta)
 {
     int target = view_offset + delta;
     if (target < 0)
@@ -126,6 +133,13 @@ void vga_scroll_view(int delta)
     }
 }
 
+void vga_scroll_view(int delta)
+{
+    uint32_t f = irq_save();
+    scroll_view_locked(delta);
+    irq_restore(f);
+}
+
 int vga_view_offset(void)
 {
     return view_offset;
@@ -135,7 +149,7 @@ int vga_view_offset(void)
 static inline void snap_to_live(void)
 {
     if (view_offset)
-        vga_scroll_view(-view_offset);
+        scroll_view_locked(-view_offset);
 }
 
 /* Matn pastga yetsa — yuqori qatorni tarixga saqlab, hammasini bitta yuqoriga suramiz */
@@ -161,6 +175,7 @@ void vga_init(void)
 
 void vga_clear(void)
 {
+    uint32_t f = irq_save();
     snap_to_live();
     /* Tozalashdan oldin ekrandagi matnni tarixga o'tkazamiz — yo'qolmaydi */
     for (int y = TEXT_TOP; y <= cursor_row && y < VGA_HEIGHT; y++)
@@ -172,6 +187,7 @@ void vga_clear(void)
     cursor_row = TEXT_TOP;
     cursor_col = 0;
     update_hw_cursor();
+    irq_restore(f);
 }
 
 static void vga_putc_locked(char c);
@@ -182,6 +198,42 @@ void vga_putc(char c)
 {
     uint32_t f = irq_save();
     vga_putc_locked(c);
+    if (c == '\b')
+        serial_puts("\b \b");              /* terminalda ham belgi o'chsin */
+    else
+        serial_putc(c);
+    irq_restore(f);
+}
+
+/* Faqat ekranga (serial portga nusxasiz). Shell qatorni tahrirlayotganda har bir
+   qayta chizish terminalga takror chiqmasligi uchun: tayyor qator Enter da yuboriladi */
+void vga_putc_local(char c)
+{
+    uint32_t f = irq_save();
+    vga_putc_locked(c);
+    irq_restore(f);
+}
+
+/* Matn kursori: x — ustun (0..79), y — qator (1..24) */
+void vga_get_cursor(int *x, int *y)
+{
+    uint32_t f = irq_save();
+    *x = cursor_col;
+    *y = cursor_row;
+    irq_restore(f);
+}
+
+void vga_set_cursor(int x, int y)
+{
+    uint32_t f = irq_save();
+    snap_to_live();
+    if (x < 0) x = 0;
+    if (x >= VGA_WIDTH) x = VGA_WIDTH - 1;
+    if (y < TEXT_TOP) y = TEXT_TOP;
+    if (y >= VGA_HEIGHT) y = VGA_HEIGHT - 1;
+    cursor_col = x;
+    cursor_row = y;
+    update_hw_cursor();
     irq_restore(f);
 }
 
@@ -244,6 +296,8 @@ uint8_t vga_get_color(void)
 void vga_write_at(int x, int y, const char *s, uint8_t fg, uint8_t bg)
 {
     uint8_t color = (fg & 0x0F) | ((bg & 0x0F) << 4);
+    if (x < 0 || y < 0 || y >= VGA_HEIGHT)
+        return;
     while (*s && x < VGA_WIDTH)
         vga_buffer[y * VGA_WIDTH + x++] = vga_entry(*s++, color);
 }
@@ -256,19 +310,24 @@ static int saved_row, saved_col;
 /* Matn hududini (1-24 qatorlar) saqlab qo'yish — muharrir yopilganda qaytariladi */
 void vga_screen_save(void)
 {
+    uint32_t f = irq_save();
     snap_to_live();
     memcpy(saved_screen, screen_row(TEXT_TOP), sizeof(saved_screen));
     saved_row = cursor_row;
     saved_col = cursor_col;
+    irq_restore(f);
 }
 
 void vga_screen_restore(void)
 {
+    uint32_t f = irq_save();
+    snap_to_live();
     memcpy(screen_row(TEXT_TOP), saved_screen, sizeof(saved_screen));
     cursor_row = saved_row;
     cursor_col = saved_col;
     enable_hw_cursor();
     update_hw_cursor();
+    irq_restore(f);
 }
 
 void vga_put_at(int x, int y, char c, uint8_t fg, uint8_t bg)
@@ -281,7 +340,7 @@ void vga_put_at(int x, int y, char c, uint8_t fg, uint8_t bg)
 /* Faqat apparat kursorini ko'chirish (matn chiqarish joyiga ta'sir qilmaydi) */
 void vga_move_hw_cursor(int x, int y)
 {
-    uint16_t pos = y * VGA_WIDTH + x;
+    uint16_t pos = (uint16_t)(y * VGA_WIDTH + x);
     outb(0x3D4, 0x0F);
     outb(0x3D5, (uint8_t)(pos & 0xFF));
     outb(0x3D4, 0x0E);

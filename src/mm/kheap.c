@@ -19,12 +19,18 @@
  * kfree:   blokni bo'sh deb belgilaymiz va qo'shni bo'sh bloklar bilan
  *          birlashtiramiz (coalescing) — aks holda xotira "maydalanib" ketadi
  *          (fragmentatsiya).
+ *
+ * HIMOYA (v0.6.1): har bir sarlavhada "sehrli raqam" bor. Kimdir o'z blokidan
+ * tashqariga yozib yuborsa (buffer overflow), qo'shni blok sarlavhasi buziladi.
+ * Ro'yxat bo'ylab yurganda buni sezsak — kernel panic: buzilgan heap bilan
+ * ishlashda davom etish ma'lumotlarni yo'qotishga olib keladi.
  */
 #include "memory.h"
 #include "kprintf.h"
 #include "string.h"
 #include "vga.h"
 #include "irq.h"
+#include "klog.h"
 
 #define BLOCK_MAGIC 0xD1B0B10Cu   /* sarlavha buzilmaganini tekshirish uchun belgi */
 #define ALIGNMENT   8
@@ -82,9 +88,19 @@ static uint32_t heap_grow(uint32_t bytes)
     return old_end;
 }
 
+/* Sarlavha butunmi? Buzilgan bo'lsa — davom etib bo'lmaydi */
+static inline void check_block(const block_t *b)
+{
+    if (b->magic != BLOCK_MAGIC)
+        panic("heap buzilgan: 0x%x dagi blok sarlavhasi ustiga yozilgan (buffer overflow?)",
+              (uint32_t)b);
+}
+
 void heap_init(void)
 {
     uint32_t start = heap_grow(PAGE_SIZE);
+    if (!start)
+        panic("heap_init: xotira yetmadi");
     first_block = last_block = (block_t *)start;
     first_block->magic = BLOCK_MAGIC;
     first_block->size  = PAGE_SIZE - HEADER_SIZE;
@@ -141,12 +157,13 @@ void *kmalloc(size_t size)
 
 static void *kmalloc_locked(size_t size)
 {
-    if (size == 0)
-        return 0;
+    if (size == 0 || size > HEAP_MAX - HEAP_START)
+        return 0;                         /* juda katta so'rov (align_up da toshib ketmasin) */
     uint32_t need = align_up((uint32_t)size, ALIGNMENT);
 
     /* 1) First Fit: birinchi mos bo'sh blok */
     for (block_t *b = first_block; b; b = b->next) {
+        check_block(b);
         if (b->free && b->size >= need) {
             split_block(b, need);
             b->free = 0;
@@ -220,9 +237,11 @@ static void kfree_locked(void *ptr)
 void heap_get_stats(heap_stats_t *s)
 {
     memset(s, 0, sizeof(*s));
+    uint32_t f = irq_save();              /* ro'yxat yurish paytida o'zgarmasin */
     s->start = HEAP_START;
     s->end   = heap_end;
     for (block_t *b = first_block; b; b = b->next) {
+        check_block(b);
         if (b->free) {
             s->free_bytes += b->size;
             s->free_blocks++;
@@ -231,11 +250,13 @@ void heap_get_stats(heap_stats_t *s)
             s->used_blocks++;
         }
     }
+    irq_restore(f);
 }
 
 void heap_dump(void)
 {
     int i = 0;
+    uint32_t f = irq_save();
     kprintf("  #   Manzil       Hajm (bayt)  Holat\n");
     for (block_t *b = first_block; b; b = b->next, i++) {
         if (i >= 40) {
@@ -248,4 +269,5 @@ void heap_dump(void)
         kprintf("%s\n", b->free ? "bo'sh" : "band");
         vga_set_color(old & 0x0F, old >> 4);
     }
+    irq_restore(f);
 }

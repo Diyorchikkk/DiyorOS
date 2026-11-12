@@ -119,6 +119,20 @@ static void keyboard_handler(registers_t *r)
             buffer_push(KEY_CTRL_C);             /* shell: kiritilayotgan qatorni bekor qilish */
         return;
     }
+    if (ctrl) {                            /* terminallardagi odatiy Ctrl birikmalari (v0.6.1) */
+        char code = 0;
+        switch (keymap[sc]) {
+        case 'a': code = KEY_HOME;   break;      /* qator boshiga */
+        case 'e': code = KEY_END;    break;      /* qator oxiriga */
+        case 'd': code = KEY_DELETE; break;      /* kursor ostidagi belgini o'chirish */
+        case 'k': code = KEY_CTRL_K; break;      /* kursordan oxirigacha o'chirish */
+        case 'u': code = KEY_CTRL_U; break;      /* butun qatorni o'chirish */
+        case 'l': code = KEY_CTRL_L; break;      /* ekranni tozalash */
+        }
+        if (code)
+            buffer_push(code);
+        return;                                  /* boshqa Ctrl+tugma — e'tiborsiz */
+    }
 
     char c = shift ? keymap_shift[sc] : keymap[sc];
     if (caps_lock) {                       /* Caps Lock faqat harflarga ta'sir qiladi */

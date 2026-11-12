@@ -21,6 +21,10 @@
  *   - 0-sahifa (0x0–0xFFF) ataylab xaritaga kiritilmagan: NULL pointer
  *     ishlatilsa, darhol Page Fault bo'ladi va xato topiladi.
  *   - 0xD0000000 dan boshlab — kernel heap (kheap.c).
+ *   - v0.6.1: kernelning KODI va o'zgarmas ma'lumotlari (.text, .rodata) FAQAT
+ *     O'QISH uchun. Xato ko'rsatkich kernel kodini buzib qo'ya olmaydi —
+ *     yozishga urinish darhol Page Fault beradi ("W^X" tamoyili: xotira yo
+ *     yoziladi, yo bajariladi, ikkalasi birga emas).
  *
  * v0.5: HAR BIR JARAYONNING O'Z PAGE DIRECTORY SI
  *   - Kernel qismi (identity map va heap) barcha jarayonlarda BIR XIL:
@@ -34,6 +38,9 @@
  */
 #include "memory.h"
 #include "string.h"
+#include "kernel.h"
+#include "klog.h"
+#include "cpu.h"
 
 static uint32_t *kernel_directory = 0;
 static uint32_t *current_directory = 0;
@@ -88,6 +95,13 @@ bool paging_translate_in(uint32_t *dir, uint32_t virt, uint32_t *phys, uint32_t 
     return true;
 }
 
+static void table_entry_clear(uint32_t virt)
+{
+    uint32_t *table = get_table(kernel_directory, virt, false, 0);
+    if (table)
+        table[(virt >> 12) & 0x3FF] = 0;
+}
+
 /* Kernel xaritasi bilan ishlash (v0.2 dagi funksiyalar) */
 bool paging_map(uint32_t virt, uint32_t phys, uint32_t flags)
 {
@@ -112,13 +126,19 @@ bool paging_translate(uint32_t virt, uint32_t *phys)
 void paging_init(void)
 {
     kernel_directory = (uint32_t *)pmm_alloc_frame();
+    if (!kernel_directory)
+        panic("paging_init: bo'sh xotira yo'q");
     memset(kernel_directory, 0, PAGE_SIZE);
 
     /* RAM oxirini 4 MB ga yaxlitlaymiz (bitta Page Table 4 MB ni qamraydi) */
     identity_limit = (pmm_memory_top() + 0x3FFFFF) & ~0x3FFFFFu;
 
-    for (uint32_t addr = PAGE_SIZE; addr < identity_limit; addr += PAGE_SIZE)
-        paging_map(addr, addr, PAGE_RW);
+    uint32_t ro_start = (uint32_t)kernel_start, ro_end = (uint32_t)kernel_data_start;
+    for (uint32_t addr = PAGE_SIZE; addr < identity_limit; addr += PAGE_SIZE) {
+        bool read_only = addr >= ro_start && addr < ro_end;     /* kernel kodi va .rodata */
+        if (!paging_map(addr, addr, read_only ? 0 : PAGE_RW))
+            panic("paging_init: sahifa jadvallari uchun xotira yetmadi");
+    }
 
     /*
      * Heap hududi uchun Page Table larni OLDINDAN yaratamiz. Sababi: jarayonlar
@@ -127,7 +147,12 @@ void paging_init(void)
      * Oldindan yaratilsa — yozuvlar o'zgarmaydi, Page Table lar esa umumiy.
      */
     for (uint32_t addr = HEAP_START; addr < HEAP_MAX; addr += 0x400000)
-        get_table(kernel_directory, addr, true, 0);
+        if (!get_table(kernel_directory, addr, true, 0))
+            panic("paging_init: heap jadvallari uchun xotira yetmadi");
+
+    /* Shell steki ostidagi qo'riqchi sahifa: xaritada yo'q — stek to'lsa darhol xato */
+    table_entry_clear((uint32_t)boot_stack_guard);
+    tss_set_df_cr3((uint32_t)kernel_directory);
 
     paging_switch(kernel_directory);
 

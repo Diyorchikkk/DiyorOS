@@ -146,6 +146,7 @@ static bool issue(uint32_t lba, uint8_t count, uint8_t cmd)
     outb(ATA_LBA1, (uint8_t)(lba >> 8));
     outb(ATA_LBA2, (uint8_t)(lba >> 16));
     outb(ATA_CMD, cmd);
+    delay400();                           /* disk holat registrini yangilashga ulgursin */
     return true;
 }
 
@@ -171,6 +172,8 @@ bool ata_read(uint32_t lba, uint32_t count, void *buf)
         count -= n;
         info.reads += n;
     }
+    if (!ok)
+        info.errors++;
     irq_restore(f);
     return ok;
 }
@@ -197,10 +200,15 @@ bool ata_write(uint32_t lba, uint32_t count, const void *buf)
         count -= n;
         info.writes += n;
     }
+    if (ok)
+        ok = wait_not_busy() && !(inb(ATA_STATUS) & (ST_ERR | ST_DF));   /* oxirgi sektor yozib bo'lindimi */
     if (ok) {                             /* disk keshidagi ma'lumotni plastinaga yozish */
         outb(ATA_CMD, CMD_FLUSH);
-        ok = wait_not_busy();
+        delay400();
+        ok = wait_not_busy() && !(inb(ATA_STATUS) & (ST_ERR | ST_DF));
     }
+    if (!ok)
+        info.errors++;
     irq_restore(f);
     return ok;
 }

@@ -32,6 +32,8 @@ static void timer_handler(registers_t *r)
 
 void timer_init(uint32_t hz)
 {
+    if (hz < 19)
+        hz = 19;                    /* bo'luvchi 16 bitga sig'ishi kerak (1193182 / 65535 = 18.2) */
     frequency = hz;
     uint32_t divisor = PIT_FREQUENCY / hz;
 
@@ -54,15 +56,18 @@ uint32_t timer_seconds(void)
 
 void timer_sleep_ms(uint32_t ms)
 {
-    uint32_t wait = (ms * frequency) / 1000;
+    /* ms * frequency 32 bitdan oshib ketmasligi uchun ikki qismga bo'lib hisoblaymiz */
+    uint32_t wait = (ms / 1000) * frequency + ((ms % 1000) * frequency + 999) / 1000;
     if (wait == 0)
         wait = 1;
+    if (wait > 0x3FFFFFFF)
+        wait = 0x3FFFFFFF;
     if (sched_active()) {           /* v0.3: vazifa uxlaydi, protsessor boshqalarga beriladi */
         task_sleep_ticks(wait);
         return;
     }
-    uint32_t target = ticks + wait;
-    while (ticks < target)
+    uint32_t start = ticks;
+    while (ticks - start < wait)
         __asm__ volatile ("hlt");   /* keyingi uzilishgacha protsessorni dam oldiramiz */
 }
 

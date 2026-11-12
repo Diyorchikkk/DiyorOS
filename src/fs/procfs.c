@@ -14,6 +14,8 @@
 #include "task.h"
 #include "string.h"
 #include "config.h"
+#include "cpu.h"
+#include "klog.h"
 
 #define GEN_BUF_SIZE 4096
 
@@ -119,13 +121,42 @@ static int gen_mounts(char *b, uint32_t n)
     return len;
 }
 
+/* Har bir qurilma uzilishi (IRQ) necha marta kelgani — Linux dagi /proc/interrupts */
+static int gen_interrupts(char *b, uint32_t n)
+{
+    static const char *names[16] = {
+        "taymer (PIT)", "klaviatura", "kaskad (slave PIC)", "COM2", "COM1", "LPT2", "floppy", "LPT1",
+        "CMOS soati", "-", "-", "-", "sichqoncha (PS/2)", "FPU", "ATA birlamchi", "ATA ikkilamchi"
+    };
+    int len = ksnprintf(b, n, "IRQ  SONI        QURILMA\n");
+    for (int i = 0; i < 16; i++)
+        if (irq_count(i))
+            len += ksnprintf(b + len, len < (int)n ? n - len : 0, "%3d  %-10u  %s\n",
+                             i, irq_count(i), names[i]);
+    len += ksnprintf(b + len, len < (int)n ? n - len : 0, "Soxta (spurious): %u\n",
+                     irq_spurious_count());
+    return len;
+}
+
+/* Kernel jurnali (dmesg bilan bir xil; oxirgi ~4 KB) */
+static int gen_kmsg(char *b, uint32_t n)
+{
+    uint32_t size = klog_size();
+    uint32_t off = size > n - 1 ? size - (n - 1) : 0;
+    uint32_t got = klog_read(off, b, n - 1);
+    b[got] = 0;
+    return (int)got;
+}
+
 /* ------------------------------ Fayl tizimi ------------------------------ */
 
 static const vfs_ops_t procfs_ops;
 
 static vfs_node_t proc_root;
 static vfs_node_t proc_files[] = {
-    { .name = "cpuinfo", .generate = gen_cpuinfo },
+    { .name = "cpuinfo",    .generate = gen_cpuinfo    },
+    { .name = "interrupts", .generate = gen_interrupts },
+    { .name = "kmsg",       .generate = gen_kmsg       },
     { .name = "meminfo", .generate = gen_meminfo },
     { .name = "mounts",  .generate = gen_mounts  },
     { .name = "tasks",   .generate = gen_tasks   },

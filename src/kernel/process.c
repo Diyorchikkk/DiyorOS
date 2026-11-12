@@ -19,9 +19,12 @@
 #include "string.h"
 #include "kprintf.h"
 #include "vga.h"
+#include "klog.h"
+#include "irq.h"
 
-#define MAX_ARGS     16
-#define EXEC_MAX     (1024 * 1024)
+#define MAX_ARGS      16
+#define EXEC_MAX      (1024 * 1024)
+#define ELF_MAX_PHDRS 16
 
 static inline uint32_t page_down(uint32_t a) { return a & ~0xFFFu; }
 static inline uint32_t page_up(uint32_t a)   { return (a + 0xFFF) & ~0xFFFu; }
@@ -79,23 +82,35 @@ static int32_t load_elf(uint32_t *dir, const uint8_t *file, uint32_t size,
     if (size < sizeof(*h) || h->magic != ELF_MAGIC || h->class != ELF_CLASS32 ||
         h->data != ELF_LSB || h->type != ET_EXEC || h->machine != EM_386)
         return PROC_ENOEXEC;
-    if (h->phoff + (uint32_t)h->phnum * sizeof(elf_phdr_t) > size)
+    /*
+     * Fayldagi har bir son SHUBHALI deb qaraladi: buzilgan yoki ataylab
+     * tayyorlangan ELF kernelni fayl chegarasidan tashqarini o'qishga majbur
+     * qilmasligi kerak. "a + b > size" ko'rinishidagi tekshiruv yetarli emas:
+     * a + b 32 bitdan toshib, kichik son bo'lib qolishi mumkin (integer
+     * overflow). Shuning uchun ayirish bilan tekshiramiz: "b > size - a".
+     */
+    if (h->phentsize != sizeof(elf_phdr_t) || h->phnum == 0 || h->phnum > ELF_MAX_PHDRS)
+        return PROC_ENOEXEC;
+    if (h->phoff > size || (uint32_t)h->phnum * sizeof(elf_phdr_t) > size - h->phoff)
         return PROC_ENOEXEC;
     if (h->entry < USER_BASE || h->entry >= USER_STACK_TOP - USER_STACK_SIZE)
         return PROC_ENOEXEC;
 
     uint32_t limit = USER_STACK_TOP - USER_STACK_SIZE;
     *image_end = USER_BASE;
+    bool entry_ok = false;
 
     for (int i = 0; i < h->phnum; i++) {
         const elf_phdr_t *ph = (const elf_phdr_t *)(file + h->phoff + i * sizeof(elf_phdr_t));
         if (ph->type != PT_LOAD || ph->memsz == 0)
             continue;
         /* Segment faqat user hududida bo'lishi shart — kernel ga yozdirmaymiz */
-        if (ph->vaddr < USER_BASE || ph->vaddr + ph->memsz > limit ||
-            ph->vaddr + ph->memsz < ph->vaddr || ph->filesz > ph->memsz ||
-            ph->offset + ph->filesz > size)
+        if (ph->vaddr < USER_BASE || ph->vaddr >= limit || ph->memsz > limit - ph->vaddr ||
+            ph->filesz > ph->memsz ||
+            ph->offset > size || ph->filesz > size - ph->offset)
             return PROC_ENOEXEC;
+        if ((ph->flags & PF_X) && h->entry >= ph->vaddr && h->entry - ph->vaddr < ph->memsz)
+            entry_ok = true;                   /* kirish nuqtasi bajariladigan segment ichida */
 
         if (!map_user_range(dir, ph->vaddr, ph->vaddr + ph->memsz, ph->flags & PF_W, pages))
             return PROC_ENOMEM;
@@ -106,6 +121,8 @@ static int32_t load_elf(uint32_t *dir, const uint8_t *file, uint32_t size,
         if (ph->vaddr + ph->memsz > *image_end)
             *image_end = ph->vaddr + ph->memsz;
     }
+    if (!entry_ok)
+        return PROC_ENOEXEC;
     *entry = h->entry;
     return 0;
 }
@@ -185,10 +202,14 @@ int32_t process_spawn(const char *path, const char *args)
         return fd;
     }
     uint32_t got = 0;
-    int32_t n;
+    int32_t n = 0;
     while (got < size && (n = vfs_read(fd, file + got, size - got)) > 0)
         got += n;
     vfs_close(fd);
+    if (n < 0) {                               /* o'qishda xato (masalan, disk) */
+        kfree(file);
+        return n;
+    }
 
     /* 2-5. Alohida xotira, segmentlar, stek */
     uint32_t *dir = paging_create_directory();
@@ -218,6 +239,7 @@ int32_t process_spawn(const char *path, const char *args)
         paging_free_directory(dir);
         return PROC_ETASKS;
     }
+    klog("exec: PID %u %s (%u sahifa, entry 0x%x)", pid, path, pages, entry);
     return (int32_t)pid;
 }
 
@@ -256,6 +278,7 @@ void process_fault(registers_t *r, const char *exception_name)
     }
     kprintf("  Jarayon to'xtatildi. Kernel va boshqa dasturlar ishlashda davom etadi.\n");
     vga_set_color(old & 0x0F, old >> 4);
+    klog("PID %u (%s): %s, EIP 0x%08x - jarayon to'xtatildi", t->pid, t->name, exception_name, r->eip);
     task_exit_code(EXIT_FAULT);
 }
 

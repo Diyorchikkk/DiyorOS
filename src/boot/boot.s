@@ -22,8 +22,16 @@
 
 # --- Kernel steki (16 KB) ---
 # C funksiyalar ishlashi uchun stek kerak. Uni .bss bo'limida ajratamiz.
+# Stek pastga qarab o'sadi. Uning ostida bitta "qo'riqchi sahifa" (guard page)
+# turadi: paging uni xaritadan chiqarib tashlaydi (v0.6.1). Stek to'lib ketsa,
+# qo'shni ma'lumotni jimgina buzish o'rniga darhol exception bo'ladi.
 .section .bss
-.align 16
+.align 4096
+.global boot_stack_guard
+boot_stack_guard:
+.skip 4096
+.global boot_stack_bottom
+boot_stack_bottom:
 stack_bottom:
 .skip 16384
 stack_top:

@@ -29,6 +29,9 @@ char keyboard_getchar(void);   /* tugma bosilguncha kutadi */
 void keyboard_inject(char c);  /* boshqa drayver (sichqoncha) buferga belgi qo'shishi uchun */
 void keyboard_cancel_waiter(void *task);   /* tugagan vazifa tugmani endi kutmaydi */
 #define KEY_CTRL_C 0x03
+#define KEY_CTRL_K 0x0B   /* v0.6.1: shell qator tahriri */
+#define KEY_CTRL_L 0x0C
+#define KEY_CTRL_U 0x1D
 
 /* --- Sichqoncha (PS/2, IRQ12) — hozircha faqat g'ildirak --- */
 int  mouse_init(void);         /* 1 — g'ildirakli sichqoncha topildi */

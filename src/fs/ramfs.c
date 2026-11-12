@@ -94,6 +94,8 @@ static int32_t ramfs_write(vfs_node_t *n, uint32_t off, uint32_t len, const uint
 {
     if (len == 0)
         return 0;
+    if (off > VFS_FILE_MAX || len > VFS_FILE_MAX - off)
+        return VFS_EFBIG;                    /* off + len toshib ketmasligi uchun ayirish bilan */
     int err = ensure_capacity(n, off + len);
     if (err)
         return err;
@@ -161,8 +163,7 @@ static int ramfs_rename(vfs_node_t *child, vfs_node_t *new_dir, const char *new_
     if (ramfs_finddir(new_dir, new_name))
         return VFS_EEXIST;
     detach(child->parent, child);
-    strncpy(child->name, new_name, VFS_NAME_MAX - 1);
-    child->name[VFS_NAME_MAX - 1] = 0;
+    strlcpy(child->name, new_name, VFS_NAME_MAX);
     attach(new_dir, child);
     vfs_touch_time(child);
     return VFS_OK;

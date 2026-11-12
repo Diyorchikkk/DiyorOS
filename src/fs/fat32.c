@@ -30,6 +30,17 @@
  * Har bir amal uzilishlar o'chiq holda bajariladi (irq_save): disk tuzilmasi
  * bir vaqtda ikki vazifa tomonidan o'zgartirilmasligi uchun. v0.8 da mutex bilan
  * almashtiriladi.
+ *
+ * ISHONCHLILIK (v0.6.1)
+ * Diskdagi ma'lumotga ISHONMAYMIZ: disk boshqa tizimda buzilgan bo'lishi mumkin.
+ *   - Klasterlar zanjiri "aylana" hosil qilsa (5 -> 6 -> 5 ...), zanjir bo'ylab
+ *     yuradigan har bir tsikl chegaralangan — kernel osilib qolmaydi.
+ *   - Boot sektordagi sonlar ulashdan oldin bir-biriga mosligi tekshiriladi.
+ *   - Yozish yarmida joy tugasa, ajratilgan ortiqcha klasterlar qaytariladi:
+ *     diskda "egasiz" klasterlar qolmaydi (fsck toza chiqadi).
+ *   - Ketma-ket o'qish/yozishda har safar zanjir boshidan yurmaslik uchun
+ *     oxirgi klaster eslab qolinadi (hint): O(n^2) o'rniga O(n).
+ *   - Bo'sh klasterlar soni bir marta sanaladi va keyin hisoblab boriladi.
  */
 #include "vfs.h"
 #include "ata.h"
@@ -37,6 +48,7 @@
 #include "string.h"
 #include "irq.h"
 #include "kprintf.h"
+#include "klog.h"
 
 #define FAT_EOC        0x0FFFFFF8u    /* bundan katta yoki teng — zanjir oxiri */
 #define FAT_EOC_MARK   0x0FFFFFFFu
@@ -50,6 +62,8 @@
 #define ATTR_DIR       0x10
 #define ATTR_ARCHIVE   0x20
 #define ATTR_LFN       0x0F
+
+#define DIR_MAX_BYTES  (2 * 1024 * 1024)   /* FAT32 da papkaning eng katta hajmi */
 
 #define NT_LOWER_BASE  0x08            /* 8.3 nomning asosiy qismi kichik harflarda */
 #define NT_LOWER_EXT   0x10            /* kengaytmasi kichik harflarda */
@@ -119,6 +133,10 @@ typedef struct {
     uint32_t root_cluster;
     uint32_t cluster_count;            /* ma'lumot klasterlari soni */
     uint32_t free_hint;
+    uint32_t free_count;               /* bo'sh klasterlar soni (free_valid bo'lsa) */
+    bool     free_valid;
+    uint32_t fsinfo_lba;               /* FSInfo sektori (0 — yo'q) */
+    bool     fsinfo_stale;             /* diskdagi FSInfo "noma'lum" deb belgilab qo'yilgan */
     uint32_t volume_id;
     char     label[12];
     vfs_node_t *root;
@@ -187,18 +205,51 @@ static bool zero_cluster(uint32_t c)
     return true;
 }
 
+/*
+ * FSInfo sektorida "bo'sh klasterlar soni" saqlanadi — boshqa tizimlar butun
+ * FAT ni sanamasdan shu songa ishonadi. Biz klaster ajratgan yoki bo'shatgan
+ * zahoti u eskiradi. Har o'zgarishda qayta yozish sekin, shuning uchun:
+ *   - birinchi o'zgarishdan OLDIN diskka "noma'lum" (0xFFFFFFFF) deb yozamiz;
+ *   - disk toza uzilganda (umount, shutdown) haqiqiy sonni yozamiz.
+ * Kompyuter to'satdan o'chsa ham diskda noto'g'ri son qolmaydi.
+ */
+static void fsinfo_write(uint32_t free_count, uint32_t next_free)
+{
+    uint8_t sec[SECTOR_SIZE];
+    if (!fs.fsinfo_lba || !ata_read(fs.fsinfo_lba, 1, sec))
+        return;
+    if (*(uint32_t *)(sec + 0) != 0x41615252 || *(uint32_t *)(sec + 484) != 0x61417272)
+        return;                                /* FSInfo emas — tegmaymiz */
+    *(uint32_t *)(sec + 488) = free_count;
+    *(uint32_t *)(sec + 492) = next_free;
+    ata_write(fs.fsinfo_lba, 1, sec);
+}
+
+static void fsinfo_invalidate(void)
+{
+    if (!fs.fsinfo_stale) {
+        fs.fsinfo_stale = true;
+        fsinfo_write(0xFFFFFFFF, 0xFFFFFFFF);
+    }
+}
+
 /* Bo'sh klaster topib, zanjirga (prev dan keyin) ulash. 0 — joy yo'q */
 static uint32_t alloc_cluster(uint32_t prev)
 {
+    fsinfo_invalidate();
     for (uint32_t i = 0; i < fs.cluster_count; i++) {
         uint32_t c = 2 + (fs.free_hint - 2 + i) % fs.cluster_count;
         if (fat_get(c) != 0)
             continue;
         if (!fat_set(c, FAT_EOC_MARK) || !zero_cluster(c))
             return 0;
-        if (prev && !fat_set(prev, c))
+        if (prev && !fat_set(prev, c)) {
+            fat_set(c, 0);                     /* zanjirga ulab bo'lmadi — egasiz qolmasin */
             return 0;
+        }
         fs.free_hint = c + 1 < fs.cluster_count + 2 ? c + 1 : 2;
+        if (fs.free_valid && fs.free_count)
+            fs.free_count--;
         return c;
     }
     return 0;
@@ -207,9 +258,17 @@ static uint32_t alloc_cluster(uint32_t prev)
 /* Zanjirdagi barcha klasterlarni bo'shatish */
 static void free_chain(uint32_t c)
 {
-    while (cluster_valid(c)) {
+    if (cluster_valid(c))
+        fsinfo_invalidate();
+    /* steps: buzilgan diskda zanjir aylana bo'lsa ham tsikl tugaydi */
+    for (uint32_t steps = 0; cluster_valid(c) && steps < fs.cluster_count; steps++) {
         uint32_t next = fat_get(c);
-        fat_set(c, 0);
+        if (next == 0)
+            break;                             /* allaqachon bo'sh: boshqa zanjirga kirib ketmaymiz */
+        if (!fat_set(c, 0))
+            break;
+        if (fs.free_valid)
+            fs.free_count++;
         if (c < fs.free_hint)
             fs.free_hint = c;
         c = next;
@@ -224,24 +283,86 @@ static uint32_t chain_nth(uint32_t c, uint32_t n)
     return cluster_valid(c) ? c : 0;
 }
 
+/*
+ * Faylning idx-klasteri (0 dan boshlab). grow = true bo'lsa, yetmagan klasterlar
+ * ajratiladi. Natija: klaster raqami, 0 — yo'q (yoki diskda joy qolmadi).
+ * Oxirgi topilgan joy tugunda eslab qolinadi: ketma-ket o'qish/yozishda
+ * zanjir har safar boshidan yurilmaydi.
+ */
+static uint32_t file_cluster(vfs_node_t *n, uint32_t idx, bool grow)
+{
+    uint32_t c, i;
+    if (n->fat.hint_cluster && n->fat.hint_index <= idx) {
+        c = n->fat.hint_cluster;
+        i = n->fat.hint_index;
+    } else {
+        c = n->fat.cluster;
+        i = 0;
+        if (!cluster_valid(c)) {
+            if (!grow)
+                return 0;
+            c = alloc_cluster(0);
+            if (!c)
+                return 0;
+            n->fat.cluster = c;
+        }
+    }
+    while (i < idx) {
+        uint32_t next = fat_get(c);
+        if (!cluster_valid(next)) {
+            if (!grow)
+                return 0;
+            next = alloc_cluster(c);
+            if (!next)
+                return 0;
+        }
+        c = next;
+        i++;
+    }
+    n->fat.hint_index = idx;
+    n->fat.hint_cluster = c;
+    return c;
+}
+
+/* Fayl hajmiga (n->size) kerak bo'lganidan ortiq klasterlarni bo'shatish */
+static void trim_chain(vfs_node_t *n)
+{
+    uint32_t keep = (n->size + fs.cluster_bytes - 1) / fs.cluster_bytes;
+    n->fat.hint_cluster = 0;
+    if (keep == 0) {
+        free_chain(n->fat.cluster);
+        n->fat.cluster = 0;
+        return;
+    }
+    uint32_t last = chain_nth(n->fat.cluster, keep - 1);
+    if (last) {
+        uint32_t rest = fat_get(last);
+        if (cluster_valid(rest)) {
+            fat_set(last, FAT_EOC_MARK);
+            free_chain(rest);
+        }
+    }
+}
+
 /* Joriy vaqt FAT formatida: yuqori 16 bit — sana, pastki — vaqt */
 static uint32_t fat_now(void)
 {
     rtc_time_t t;
     rtc_read(&t);
-    uint16_t date = (uint16_t)(((t.year - 1980) << 9) | (t.month << 5) | t.day);
+    uint32_t year = t.year >= 1980 ? t.year - 1980u : 0;
+    uint16_t date = (uint16_t)((year << 9) | (t.month << 5) | t.day);
     uint16_t time = (uint16_t)((t.hour << 11) | (t.minute << 5) | (t.second / 2));
     return ((uint32_t)date << 16) | time;
 }
 
 static void to_rtc(uint16_t date, uint16_t time, rtc_time_t *t)
 {
-    t->year   = 1980 + (date >> 9);
-    t->month  = (date >> 5) & 0x0F;
-    t->day    = date & 0x1F;
-    t->hour   = time >> 11;
-    t->minute = (time >> 5) & 0x3F;
-    t->second = (time & 0x1F) * 2;
+    t->year   = (uint16_t)(1980 + (date >> 9));
+    t->month  = (uint8_t)((date >> 5) & 0x0F);
+    t->day    = (uint8_t)(date & 0x1F);
+    t->hour   = (uint8_t)(time >> 11);
+    t->minute = (uint8_t)((time >> 5) & 0x3F);
+    t->second = (uint8_t)((time & 0x1F) * 2);
 }
 
 /* ------------------------- Papka yozuvlari ------------------------- */
@@ -317,6 +438,23 @@ static bool short_char_ok(char c)
         if (c == *extra)
             return true;
     return false;
+}
+
+/* FAT da taqiqlangan nomlar: Windows/macOS bunday faylni ocha olmaydi */
+static bool fat_name_ok(const char *name)
+{
+    size_t len = strlen(name);
+    if (len == 0 || name[0] == ' ' || name[len - 1] == ' ' || name[len - 1] == '.')
+        return false;
+    for (size_t i = 0; i < len; i++) {
+        char c = name[i];
+        if (c < 32 || c >= 127)
+            return false;
+        for (const char *bad = "\"*/:<>?\\|"; *bad; bad++)
+            if (c == *bad)
+                return false;
+    }
+    return true;
 }
 
 /* Nom 8.3 ko'rinishiga to'g'ridan-to'g'ri sig'adimi? (har bir qismi bir xil registrda) */
@@ -448,6 +586,8 @@ static vfs_node_t *node_from_entry(const fat_dirent_t *e, const char *name, uint
     return n;
 }
 
+static void free_tree(vfs_node_t *n);
+
 /* Papka ichidagilarni diskdan o'qib, tugunlar yaratish (birinchi murojaatda) */
 static int load_dir(vfs_node_t *dir)
 {
@@ -465,9 +605,22 @@ static int load_dir(vfs_node_t *dir)
     uint32_t per_cluster = fs.cluster_bytes / 32;
     bool done = false;
 
+    /*
+     * Aylana zanjirni aniqlash ("toshbaqa va quyon" algoritmi): c har qadamda,
+     * slow esa har ikki qadamda bir marta yuradi. Zanjir aylana bo'lsa, c uni albatta quvib yetadi.
+     * Bundan tashqari FAT32 da papka 2 MB dan (65536 yozuv) oshmasligi kerak.
+     */
+    uint32_t steps = 0, slow = dir_cluster_of(dir);
     for (uint32_t c = dir_cluster_of(dir); cluster_valid(c) && !done; c = fat_get(c)) {
-        if (!ata_read(cluster_lba(c), fs.spc, buf)) {
-            kfree(buf);
+        if (steps > 0 && !(steps & 1))
+            slow = fat_get(slow);              /* slow = zanjirning (steps / 2)-klasteri */
+        bool cycle = steps > 0 && c == slow;
+        if (cycle || ++steps > DIR_MAX_BYTES / fs.cluster_bytes ||
+            !ata_read(cluster_lba(c), fs.spc, buf)) {
+            kfree(buf);                        /* aylana zanjir, juda katta papka yoki disk xatosi */
+            free_tree(dir);                    /* yarim o'qilgan ro'yxat qolmasin */
+            if (cycle)
+                klog("fat32: papka zanjiri aylana hosil qilgan (klaster %u) - disk buzilgan", c);
             return VFS_EIO;
         }
         for (uint32_t i = 0; i < per_cluster; i++, index++) {
@@ -527,6 +680,7 @@ static int load_dir(vfs_node_t *dir)
             vfs_node_t *n = node_from_entry(e, name, index, lfn_used);
             if (!n) {
                 kfree(buf);
+                free_tree(dir);
                 return VFS_ENOMEM;
             }
             attach_sorted(dir, n);
@@ -564,7 +718,11 @@ static int find_free_slots(vfs_node_t *dir, uint32_t count, uint32_t *start)
     if (!buf)
         return VFS_ENOMEM;
 
-    for (;;) {
+    for (uint32_t steps = 0; ; steps++) {
+        if (steps > DIR_MAX_BYTES / fs.cluster_bytes) {   /* aylana zanjir yoki papka to'la (2 MB) */
+            kfree(buf);
+            return VFS_ENOSPC;
+        }
         if (!cluster_valid(c)) {               /* papka tugadi — yangi klaster qo'shamiz */
             c = alloc_cluster(prev);
             if (!c) {
@@ -682,10 +840,13 @@ static int32_t do_read(vfs_node_t *n, uint32_t off, uint32_t len, uint8_t *buf)
     uint8_t *cbuf = kmalloc(fs.cluster_bytes);
     if (!cbuf)
         return VFS_ENOMEM;
-    uint32_t c = chain_nth(n->fat.cluster, off / fs.cluster_bytes);
     uint32_t done = 0;
-    while (done < len && c) {
-        uint32_t in = (off + done) % fs.cluster_bytes;
+    while (done < len) {
+        uint32_t pos = off + done;
+        uint32_t c = file_cluster(n, pos / fs.cluster_bytes, false);
+        if (!c)
+            break;                             /* zanjir hajmdan qisqa (buzilgan fayl) */
+        uint32_t in = pos % fs.cluster_bytes;
         uint32_t chunk = fs.cluster_bytes - in;
         if (chunk > len - done)
             chunk = len - done;
@@ -695,37 +856,9 @@ static int32_t do_read(vfs_node_t *n, uint32_t off, uint32_t len, uint8_t *buf)
         }
         memcpy(buf + done, cbuf + in, chunk);
         done += chunk;
-        c = fat_get(c);
-        if (!cluster_valid(c))
-            c = 0;
     }
     kfree(cbuf);
     return (int32_t)done;
-}
-
-/* Fayl kamida 'clusters' ta klasterdan iborat bo'lsin */
-static int ensure_clusters(vfs_node_t *n, uint32_t clusters)
-{
-    if (clusters == 0)
-        return VFS_OK;
-    if (!n->fat.cluster) {
-        uint32_t c = alloc_cluster(0);
-        if (!c)
-            return VFS_ENOSPC;
-        n->fat.cluster = c;
-    }
-    uint32_t c = n->fat.cluster, have = 1;
-    while (have < clusters) {
-        uint32_t next = fat_get(c);
-        if (!cluster_valid(next)) {
-            next = alloc_cluster(c);
-            if (!next)
-                return VFS_ENOSPC;
-        }
-        c = next;
-        have++;
-    }
-    return VFS_OK;
 }
 
 static int32_t do_write(vfs_node_t *n, uint32_t off, uint32_t len, const uint8_t *buf)
@@ -733,42 +866,47 @@ static int32_t do_write(vfs_node_t *n, uint32_t off, uint32_t len, const uint8_t
     if (len == 0)
         return 0;
     if (off + len < off)
-        return VFS_EFBIG;
-    uint32_t end = off + len;
-    int err = ensure_clusters(n, (end + fs.cluster_bytes - 1) / fs.cluster_bytes);
-    if (err)
-        return err;
+        return VFS_EFBIG;                      /* 4 GB dan oshib ketdi */
 
     uint8_t *cbuf = kmalloc(fs.cluster_bytes);
     if (!cbuf)
         return VFS_ENOMEM;
-    uint32_t c = chain_nth(n->fat.cluster, off / fs.cluster_bytes);
+    int err = VFS_OK;
     uint32_t done = 0;
-    while (done < len && c) {
-        uint32_t in = (off + done) % fs.cluster_bytes;
+    while (done < len) {
+        uint32_t pos = off + done;
+        /* Kerakli klaster yo'q bo'lsa — ajratiladi. Agar off > hajm bo'lsa, oradagi
+           klasterlar ham ajratiladi va nolligicha qoladi (yangi klaster tozalangan) */
+        uint32_t c = file_cluster(n, pos / fs.cluster_bytes, true);
+        if (!c) {
+            err = VFS_ENOSPC;
+            break;
+        }
+        uint32_t in = pos % fs.cluster_bytes;
         uint32_t chunk = fs.cluster_bytes - in;
         if (chunk > len - done)
             chunk = len - done;
         if (chunk < fs.cluster_bytes && !ata_read(cluster_lba(c), fs.spc, cbuf)) {
-            kfree(cbuf);
-            return VFS_EIO;
+            err = VFS_EIO;
+            break;
         }
         memcpy(cbuf + in, buf + done, chunk);
         if (!ata_write(cluster_lba(c), fs.spc, cbuf)) {
-            kfree(cbuf);
-            return VFS_EIO;
+            err = VFS_EIO;
+            break;
         }
         done += chunk;
-        c = fat_get(c);
-        if (!cluster_valid(c))
-            c = 0;
     }
     kfree(cbuf);
-    /* Agar off > hajm bo'lsa, oradagi bo'shliq nolligicha qoladi: yangi klasterlar tozalangan */
-    if (end > n->size)
-        n->size = end;
-    err = update_dirent(n);
-    return err ? err : (int32_t)done;
+
+    if (off + done > n->size && done > 0)
+        n->size = off + done;
+    if (err)
+        trim_chain(n);                         /* yarim yo'lda to'xtadik: ortiqcha klasterlarni qaytaramiz */
+    int uerr = update_dirent(n);
+    if (done > 0 && !uerr)
+        return (int32_t)done;                  /* qisman yozilgan bo'lsa ham — nechta bayt yozilgani */
+    return err ? err : uerr;
 }
 
 static int do_truncate(vfs_node_t *n, uint32_t size)
@@ -779,24 +917,13 @@ static int do_truncate(vfs_node_t *n, uint32_t size)
         while (n->size < size) {
             uint32_t chunk = size - n->size > SECTOR_SIZE ? SECTOR_SIZE : size - n->size;
             int32_t w = do_write(n, n->size, chunk, zero);
-            if (w < 0)
-                return w;
+            if (w <= 0)
+                return w < 0 ? w : VFS_ENOSPC;
         }
         return VFS_OK;
     }
-    uint32_t keep = (size + fs.cluster_bytes - 1) / fs.cluster_bytes;
-    if (keep == 0) {
-        free_chain(n->fat.cluster);
-        n->fat.cluster = 0;
-    } else {
-        uint32_t last = chain_nth(n->fat.cluster, keep - 1);
-        if (last) {
-            uint32_t rest = fat_get(last);
-            fat_set(last, FAT_EOC_MARK);
-            free_chain(rest);
-        }
-    }
     n->size = size;
+    trim_chain(n);
     return update_dirent(n);
 }
 
@@ -822,6 +949,8 @@ static vfs_node_t *do_finddir(vfs_node_t *dir, const char *name)
 
 static int do_create(vfs_node_t *dir, const char *name, vfs_type_t type, vfs_node_t **out)
 {
+    if (!fat_name_ok(name))
+        return VFS_EINVAL;
     int err = load_dir(dir);
     if (err)
         return err;
@@ -867,8 +996,11 @@ static int do_create(vfs_node_t *dir, const char *name, vfs_type_t type, vfs_nod
     }
 
     vfs_node_t *n = node_from_entry(&e, name, index, lfn);
-    if (!n)
+    if (!n) {
+        erase_entries(dir, index, lfn);        /* diskda "tugunsiz" yozuv qolmasin */
+        free_chain(cluster);
         return VFS_ENOMEM;
+    }
     if (type == VFS_DIR)
         n->fat.loaded = true;                  /* yangi papka bo'sh */
     attach_sorted(dir, n);
@@ -889,6 +1021,8 @@ static int do_unlink(vfs_node_t *dir, vfs_node_t *child)
 
 static int do_rename(vfs_node_t *child, vfs_node_t *new_dir, const char *new_name)
 {
+    if (!fat_name_ok(new_name))
+        return VFS_EINVAL;
     int err = load_dir(new_dir);
     if (err)
         return err;
@@ -920,8 +1054,7 @@ static int do_rename(vfs_node_t *child, vfs_node_t *new_dir, const char *new_nam
     }
 
     detach(old_dir, child);
-    strncpy(child->name, new_name, VFS_NAME_MAX - 1);
-    child->name[VFS_NAME_MAX - 1] = 0;
+    strlcpy(child->name, new_name, VFS_NAME_MAX);
     child->fat.dir_index = index;
     child->fat.lfn_count = lfn;
     memcpy(child->fat.short_name, e.name, 11);
@@ -943,6 +1076,8 @@ static void free_tree(vfs_node_t *n)
 
 static int do_unmount(vfs_node_t *root)
 {
+    if (fs.fsinfo_stale && fs.free_valid)      /* toza uzish: haqiqiy sonni yozib qo'yamiz */
+        fsinfo_write(fs.free_count, fs.free_hint);
     free_tree(root);
     kfree(root);
     fs.mounted = false;
@@ -979,7 +1114,17 @@ static const vfs_ops_t fat_ops = {
 
 /* ------------------------------ Ulash (mount) ------------------------------ */
 
+static int mount_locked(vfs_node_t **out);
+
 int fat32_mount(vfs_node_t **out)
+{
+    uint32_t f = irq_save();
+    int err = mount_locked(out);
+    irq_restore(f);
+    return err;
+}
+
+static int mount_locked(vfs_node_t **out)
 {
     if (!ata_info()->present)
         return VFS_ENOENT;
@@ -1013,6 +1158,23 @@ int fat32_mount(vfs_node_t **out)
         b->root_cluster < 2 || memcmp(b->fs_type, "FAT32", 5) != 0)
         return VFS_EINVAL;                     /* FAT32 emas */
 
+    /*
+     * Boot sektordagi sonlar bir-biriga mos kelishi shart. Buzilgan disk
+     * "FAT 10 sektor, lekin klasterlar 1 million" desa, FAT dan tashqarini
+     * o'qib yuborardik. Har bir hisob toshib ketmasligi uchun 64-bitda.
+     */
+    uint32_t total     = b->total32 ? b->total32 : b->total16;
+    uint64_t meta      = (uint64_t)b->reserved_sectors + (uint64_t)b->fat_count * b->fat_size32;
+    uint32_t disk_size = ata_info()->sectors;
+    if (b->reserved_sectors == 0 || b->fat_count > 4 || total == 0 ||
+        part >= disk_size || total > disk_size - part || meta >= total)
+        return VFS_EINVAL;
+    uint32_t clusters = (total - (uint32_t)meta) / b->sectors_per_cluster;
+    if (clusters == 0 || clusters > 0x0FFFFFF5u ||
+        (uint64_t)b->fat_size32 * (SECTOR_SIZE / 4) < (uint64_t)clusters + 2 ||   /* FAT yetarli kattami */
+        b->root_cluster >= clusters + 2)
+        return VFS_EINVAL;
+
     memset(&fs, 0, sizeof(fs));
     fs.part_lba      = part;
     fs.spc           = b->sectors_per_cluster;
@@ -1022,8 +1184,9 @@ int fat32_mount(vfs_node_t **out)
     fs.fat_count     = b->fat_count;
     fs.data_lba      = fs.fat_lba + fs.fat_count * fs.fat_size;
     fs.root_cluster  = b->root_cluster;
-    uint32_t total   = b->total32 ? b->total32 : b->total16;
-    fs.cluster_count = (total - (fs.data_lba - part)) / fs.spc;
+    fs.cluster_count = clusters;
+    if (b->fsinfo_sector && b->fsinfo_sector < b->reserved_sectors)
+        fs.fsinfo_lba = part + b->fsinfo_sector;
     fs.free_hint     = 2;
     fs.volume_id     = b->volume_id;
     memcpy(fs.label, b->label, 11);
@@ -1045,6 +1208,7 @@ int fat32_mount(vfs_node_t **out)
     fs.root = root;
     fs.mounted = true;
     *out = root;
+    klog("fat32: \"%s\" ulandi: %u klaster x %u bayt", fs.label, fs.cluster_count, fs.cluster_bytes);
     return VFS_OK;
 }
 
@@ -1061,9 +1225,14 @@ void fat32_stats(fat32_stats_t *st)
     st->fat_sectors    = fs.fat_size;
     st->partition_lba  = fs.part_lba;
     strcpy(st->label, fs.label);
-    for (uint32_t c = 2; c < fs.cluster_count + 2; c++)    /* bo'sh klasterlarni sanash */
-        if (fat_get(c) == 0)
-            st->free_clusters++;
+    if (!fs.free_valid) {                  /* birinchi marta: butun FAT ni o'qib sanaymiz */
+        fs.free_count = 0;
+        for (uint32_t c = 2; c < fs.cluster_count + 2; c++)
+            if (fat_get(c) == 0)
+                fs.free_count++;
+        fs.free_valid = true;              /* keyin alloc/free o'zi hisoblab boradi */
+    }
+    st->free_clusters = fs.free_count;
     irq_restore(f);
 }
 
@@ -1081,6 +1250,8 @@ int fat32_mkfs(const char *label)
         return VFS_ENOENT;
     if (fs.mounted)
         return VFS_EBUSY;
+    if (ai->sectors < 66600)
+        return VFS_ENOSPC;                     /* FAT32 uchun disk juda kichik (hisobda toshib ketmasin) */
 
     uint32_t total = ai->sectors;
     uint32_t spc = total <= 532480 ? 1 : (total <= 16777216 ? 8 : 16);   /* 260 MB / 8 GB */
@@ -1189,5 +1360,7 @@ int fat32_mkfs(const char *label)
 
     kfree(zero);
     irq_restore(f);
+    klog("fat32: mkfs %s (%u sektor, klaster %u bayt)", err ? "muvaffaqiyatsiz" : "bajarildi",
+         total, spc * SECTOR_SIZE);
     return err;
 }

@@ -22,6 +22,8 @@
 #include "kprintf.h"
 #include "task.h"
 #include "process.h"
+#include "klog.h"
+#include <stdbool.h>
 
 #define PIC1_CMD  0x20
 #define PIC1_DATA 0x21
@@ -50,6 +52,8 @@ extern uint32_t isr_stub_table[48];   /* interrupts.s da */
 extern void idt_load(uint32_t);
 extern void isr128(void);          /* syscall stub */
 extern void isr129(void);          /* task_yield stub */
+
+registers_t *interrupt_handler(registers_t *r);   /* interrupts.s chaqiradi */
 
 static const char *exception_names[32] = {
     "Division By Zero (0 ga bo'lish)", "Debug", "Non Maskable Interrupt",
@@ -95,6 +99,8 @@ void idt_init(void)
 
     for (int i = 0; i < 48; i++)
         idt_set(i, isr_stub_table[i], 0x08, 0x8E);
+    /* #8 Double Fault: task gate (0x85) — protsessor alohida TSS va toza stekka o'tadi */
+    idt_set(8, 0, DF_TSS_SEL, 0x85);
     idt_set(YIELD_VECTOR, (uint32_t)isr129, 0x08, 0x8E);
     /* 0xEE: DPL = 3 — ring 3 dagi dastur ham "int 0x80" ni chaqira oladi.
        Boshqa barcha uzilishlarni (0x8E, DPL = 0) dastur chaqirsa — General Protection Fault */
@@ -110,32 +116,40 @@ void irq_register(int irq, irq_handler_t handler)
         irq_handlers[irq] = handler;
 }
 
-/* Exception bo'lsa — "kernel panic" ekrani va tizimni to'xtatish */
-static void kernel_panic(registers_t *r)
-{
-    vga_set_color(VGA_WHITE, VGA_RED);
-    kprintf("\n\n  *** KERNEL PANIC ***                                                          \n");
-    kprintf("  Exception #%u: %s\n", r->int_no, exception_names[r->int_no]);
-    kprintf("  Error code: 0x%x   EIP: 0x%08x   CS: 0x%x   EFLAGS: 0x%x\n",
-            r->err_code, r->eip, r->cs, r->eflags);
-    kprintf("  EAX=%08x EBX=%08x ECX=%08x EDX=%08x\n", r->eax, r->ebx, r->ecx, r->edx);
+/* Har bir IRQ necha marta kelgani (/proc/interrupts) */
+static uint32_t irq_counts[16];
+static uint32_t spurious_count;
 
-    if (r->int_no == 14) {
-        /* Page Fault: CR2 registrida xato bergan manzil saqlanadi */
-        uint32_t cr2;
-        __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
-        kprintf("  Sahifa xatosi manzili (CR2): 0x%08x\n", cr2);
-        kprintf("  Sabab: %s, %s, %s rejimida\n",
-                (r->err_code & 1) ? "ruxsat buzildi" : "sahifa xaritada yo'q",
-                (r->err_code & 2) ? "yozishda" : "o'qishda",
-                (r->err_code & 4) ? "foydalanuvchi" : "kernel");
-        if (cr2 < 0x1000)
-            kprintf("  (NULL pointer ishlatilgan bo'lishi mumkin)\n");
+uint32_t irq_count(int irq)
+{
+    return (irq >= 0 && irq < 16) ? irq_counts[irq] : 0;
+}
+
+uint32_t irq_spurious_count(void)
+{
+    return spurious_count;
+}
+
+/*
+ * "Soxta" uzilish (spurious IRQ): elektr shovqini sababli PIC ba'zan IRQ7
+ * (yoki IRQ15) ni yuboradi, lekin aslida hech bir qurilma so'ramagan.
+ * Farqlash uchun PIC ning ISR registrini o'qiymiz: haqiqiy uzilishda mos
+ * bit yoqilgan bo'ladi. Soxtasiga EOI yuborilmaydi (IRQ15 da faqat masterga).
+ */
+static bool irq_is_spurious(int irq)
+{
+    if (irq == 7) {
+        outb(PIC1_CMD, 0x0B);                  /* "ISR registrini o'qiyman" */
+        return !(inb(PIC1_CMD) & 0x80);
     }
-    kprintf("  Tizim to'xtatildi. Qayta yoqing.\n");
-    __asm__ volatile ("cli");
-    for (;;)
-        __asm__ volatile ("hlt");
+    if (irq == 15) {
+        outb(PIC2_CMD, 0x0B);
+        if (!(inb(PIC2_CMD) & 0x80)) {
+            outb(PIC1_CMD, PIC_EOI);           /* master kaskad (IRQ2) ni haqiqiy deb biladi */
+            return true;
+        }
+    }
+    return false;
 }
 
 /*
@@ -146,10 +160,13 @@ static void kernel_panic(registers_t *r)
 registers_t *interrupt_handler(registers_t *r)
 {
     if (r->int_no < 32) {
-        if ((r->cs & 3) == 3)                  /* xato dasturda (ring 3) — faqat u o'ladi */
+        if (r->int_no == 7 && fpu_handle_nm(r))
+            return r;                          /* FPU holati almashtirildi — dastur davom etadi */
+        if ((r->cs & 3) == 3) {                /* xato dasturda (ring 3) — faqat u o'ladi */
             process_fault(r, exception_names[r->int_no]);
-        kernel_panic(r);                       /* xato kernelning o'zida — tizim to'xtaydi */
-        return r;
+            return sched_maybe_switch(r);
+        }
+        panic_exception(r, exception_names[r->int_no]);   /* kernelning o'zida — tizim to'xtaydi */
     }
 
     if (r->int_no == SYSCALL_VECTOR) {
@@ -160,8 +177,13 @@ registers_t *interrupt_handler(registers_t *r)
     if (r->int_no == YIELD_VECTOR)
         return sched_yield_handler(r);
 
-    int irq = r->int_no - 32;
-    if (irq < 16) {
+    int irq = (int)r->int_no - 32;
+    if (irq >= 0 && irq < 16) {
+        if (irq_is_spurious(irq)) {
+            spurious_count++;
+            return r;
+        }
+        irq_counts[irq]++;
         if (irq_handlers[irq])
             irq_handlers[irq](r);
 

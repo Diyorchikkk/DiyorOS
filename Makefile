@@ -2,7 +2,8 @@
 #  DiyorOS — Makefile
 #
 #  make        — kernelni yig'ish (build/diyoros.bin)
-#  make run    — QEMU da ishga tushirish
+#  make run    — QEMU da ishga tushirish (ekran matni terminalda ham ko'rinadi)
+#  make debug  — QEMU ni GDB uchun kutish rejimida ishga tushirish
 #  make iso    — yuklanadigan ISO (GRUB kerak, ixtiyoriy)
 #  make clean  — build papkasini tozalash
 #
@@ -38,10 +39,16 @@ ISO      := $(BUILD)/diyoros.iso
 DISK     := disk.img
 DISK_MB  := 64
 QEMU_DISK := -drive file=$(DISK),format=raw,if=ide,index=0
+# v0.6.1: serial konsol — DiyorOS ekraniga chiqqan matn va kernel jurnali shu
+# terminalda ham ko'rinadi (kernel panic bo'lsa ham xabar yo'qolmaydi)
+QEMU_SERIAL := -serial stdio
 
-CFLAGS   := $(ARCH_C) -std=gnu99 -ffreestanding -O2 -Wall -Wextra \
+# -mgeneral-regs-only     kernel FPU registrlariga tegmaydi (ular dasturlarniki)
+# -fno-omit-frame-pointer  kernel panic da "backtrace" chiqarish uchun EBP zanjiri
+CFLAGS   := $(ARCH_C) -std=gnu99 -ffreestanding -O2 -Wall -Wextra -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes -Wpointer-arith \
             -fno-stack-protector -fno-asynchronous-unwind-tables \
-            -mgeneral-regs-only -Iinclude
+            -fno-omit-frame-pointer -mgeneral-regs-only -Iinclude
 LDFLAGS  := $(ARCH_LD) -T linker.ld -ffreestanding -nostdlib -O2
 
 C_SRC    := $(wildcard src/*/*.c)
@@ -51,7 +58,7 @@ OBJS     := $(patsubst src/%.s,$(BUILD)/%.o,$(ASM_SRC)) \
             $(BUILD)/initrd.o
 
 # ---- User dasturlar (v0.5) ----
-USER_PROGS   := hello guess primes hack isolate kundalik
+USER_PROGS   := hello guess primes hack isolate kundalik pi
 USER_BINS    := $(addprefix $(BUILD)/user/,$(USER_PROGS))
 USER_LIB     := $(BUILD)/user/crt0.o $(BUILD)/user/libc.o
 USER_CFLAGS  := $(ARCH_C) -std=gnu99 -ffreestanding -O2 -Wall -Wextra \
@@ -59,7 +66,7 @@ USER_CFLAGS  := $(ARCH_C) -std=gnu99 -ffreestanding -O2 -Wall -Wextra \
                 -fno-builtin -Iinclude -Iuser
 USER_LDFLAGS := $(ARCH_LD) -T user/linker.ld -ffreestanding -nostdlib -static
 
-.PHONY: all run iso run-iso clean newdisk
+.PHONY: all run debug iso run-iso clean newdisk
 .SECONDARY:
 
 all: $(KERNEL)
@@ -99,7 +106,12 @@ newdisk:
 	$(MAKE) $(DISK)
 
 run: $(KERNEL) $(DISK)
-	$(QEMU) -kernel $(KERNEL) -m 128M -rtc base=localtime $(QEMU_DISK) $(QEMU_DISPLAY)
+	$(QEMU) -kernel $(KERNEL) -m 128M -rtc base=localtime $(QEMU_DISK) $(QEMU_SERIAL) $(QEMU_DISPLAY)
+
+# GDB bilan tuzatish: QEMU birinchi buyruqda to'xtab turadi. Boshqa terminalda:
+#   i686-elf-gdb build/diyoros.bin -ex "target remote :1234"
+debug: $(KERNEL) $(DISK)
+	$(QEMU) -kernel $(KERNEL) -m 128M -rtc base=localtime $(QEMU_DISK) $(QEMU_SERIAL) $(QEMU_DISPLAY) -s -S
 
 iso: $(KERNEL)
 	@mkdir -p $(BUILD)/iso/boot/grub
@@ -108,7 +120,7 @@ iso: $(KERNEL)
 	grub-mkrescue -o $(ISO) $(BUILD)/iso 2>/dev/null || i686-elf-grub-mkrescue -o $(ISO) $(BUILD)/iso
 
 run-iso: iso $(DISK)
-	$(QEMU) -cdrom $(ISO) -m 128M -rtc base=localtime $(QEMU_DISK) $(QEMU_DISPLAY)
+	$(QEMU) -cdrom $(ISO) -m 128M -rtc base=localtime $(QEMU_DISK) $(QEMU_SERIAL) $(QEMU_DISPLAY)
 
 clean:
 	rm -rf $(BUILD)

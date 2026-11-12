@@ -23,11 +23,14 @@
 #include "drivers.h"
 #include "string.h"
 #include "config.h"
+#include "kprintf.h"
+#include "klog.h"
 
 #define EFAULT     (-14)          /* noto'g'ri ko'rsatkich */
 #define ENOSYS     (-38)          /* bunday syscall yo'q */
 #define IO_MAX     (64 * 1024)    /* bitta read/write uchun maksimum */
 #define HEAP_LIMIT (16 * 1024 * 1024)
+#define FDS_PER_PROCESS 8         /* bitta dastur ochishi mumkin bo'lgan fayllar */
 
 /* Ko'rsatkich jarayonning o'z xotirasidami? */
 static bool user_ok(uint32_t ptr, uint32_t len, bool write)
@@ -106,8 +109,24 @@ static int32_t sys_read(uint32_t fd, uint32_t buf, uint32_t len)
         len = IO_MAX;
     if (!user_ok(buf, len, true))
         return EFAULT;
-    if (fd == 0)
+    if (fd == 0) {
+        /*
+         * Klaviatura bitta: uni faqat OLDINGI PLANDAGI dastur o'qiy oladi.
+         * Fon jarayoni ("dastur &") o'qimoqchi bo'lsa, u shell bilan tugmalarni
+         * talashib qolardi. Unix da bunday jarayonga SIGTTIN yuboriladi; biz
+         * uni xabar bilan to'xtatamiz.
+         */
+        task_t *t = task_current();
+        if (task_foreground() != t->pid) {
+            uint8_t old = vga_get_color();
+            vga_set_color(VGA_DARK_GREY, VGA_BLACK);
+            kprintf("\n[PID %u] %s: fon jarayoni klaviaturadan o'qiy olmaydi - to'xtatildi\n",
+                    t->pid, t->name);
+            vga_set_color(old & 0x0F, old >> 4);
+            task_exit_code(EXIT_TTIN);         /* qaytmaydi */
+        }
         return read_line((char *)buf, len);
+    }
     if (!vfs_fd_owned(fd, task_current()->pid))
         return VFS_EBADF;
     return vfs_read(fd, (void *)buf, len);
@@ -118,6 +137,8 @@ static int32_t sys_open(uint32_t upath, uint32_t flags)
     char path[VFS_PATH_MAX];
     if (!copy_string(path, upath, sizeof(path)))
         return EFAULT;
+    if (vfs_fd_count(task_current()->pid) >= FDS_PER_PROCESS)
+        return VFS_EMFILE;                    /* bitta dastur butun jadvalni to'ldirib qo'ymasin */
     return vfs_open(path, flags & (VFS_O_READ | VFS_O_WRITE | VFS_O_CREATE | VFS_O_TRUNC | VFS_O_APPEND));
 }
 
@@ -135,9 +156,10 @@ static int32_t sys_sbrk(int32_t increment)
     uint32_t old = t->brk;
     if (increment == 0)
         return (int32_t)old;
-    uint32_t new_brk = old + increment;
+    uint32_t new_brk = old + (uint32_t)increment;
     if (increment < 0) {
-        if (new_brk < t->brk_start)
+        /* new_brk > old — ayirish 0 dan pastga "aylanib" ketgan (integer underflow) */
+        if (new_brk > old || new_brk < t->brk_start)
             return -1;
         t->brk = new_brk;                     /* soddalik uchun sahifalarni qaytarmaymiz */
         return (int32_t)old;
@@ -147,6 +169,13 @@ static int32_t sys_sbrk(int32_t increment)
         return -1;
 
     for (uint32_t page = (old + 0xFFF) & ~0xFFFu; page < new_brk; page += PAGE_SIZE) {
+        /* Heap avval kichraytirilgan bo'lsa, sahifa hali xaritada turibdi: qayta
+           ajratsak, eski frame yo'qolib qolardi (xotira oqishi). Uni tozalab ishlatamiz */
+        uint32_t phys;
+        if (paging_translate_in(t->page_dir, page, &phys, 0)) {
+            memset((void *)(phys & ~0xFFFu), 0, PAGE_SIZE);
+            continue;
+        }
         uint32_t frame = pmm_alloc_frame();
         if (!frame)
             return -1;
@@ -199,7 +228,10 @@ void syscall_handler(registers_t *r)
     case SYS_SYSINFO:  ret = sys_sysinfo(a); break;
     case SYS_SETCOLOR: vga_set_color(a & 0x0F, VGA_BLACK); ret = 0; break;
     case SYS_CLEAR:    vga_clear(); ret = 0; break;
-    default:           ret = ENOSYS; break;
+    default:
+        klog("PID %u (%s): noma'lum syscall %u", task_current()->pid, task_current()->name, r->eax);
+        ret = ENOSYS;
+        break;
     }
     r->eax = (uint32_t)ret;                   /* natija dasturga EAX orqali qaytadi */
 }

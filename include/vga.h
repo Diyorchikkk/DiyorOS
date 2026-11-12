@@ -3,6 +3,7 @@
 #define VGA_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #define VGA_WIDTH  80
 #define VGA_HEIGHT 25
@@ -31,5 +32,9 @@ void    vga_screen_save(void);
 void    vga_screen_restore(void);
 void    vga_put_at(int x, int y, char c, uint8_t fg, uint8_t bg);
 void    vga_move_hw_cursor(int x, int y);
+/* v0.6.1: matn kursori (shell qator tahriri uchun) va serial nusxa */
+void    vga_get_cursor(int *x, int *y);
+void    vga_set_cursor(int x, int y);
+void    vga_putc_local(char c);   /* serial portga nusxalamasdan */
 
 #endif

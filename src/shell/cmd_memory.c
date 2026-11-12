@@ -241,6 +241,14 @@ void cmd_translate(const char *args)
 void cmd_pagefault(const char *args)
 {
     uint32_t addr = 0xA0000000;          /* xaritaga kiritilmagan manzil */
+    if (strcmp(args, "kod") == 0) {
+        /* v0.6.1: kernel kodi faqat o'qish uchun — ustiga yozish Page Fault beradi */
+        volatile uint8_t *code = (volatile uint8_t *)(uint32_t)cmd_pagefault;
+        kprintf("Kernel kodiga (0x%x) yozishga urinish... (Exception #14 kutilmoqda)\n", (uint32_t)code);
+        *code = 0x90;
+        kprintf("Yozildi (bu chiqmasligi kerak edi: kod himoyalanmagan)\n");
+        return;
+    }
     if (strcmp(args, "null") == 0)
         addr = 0;
     kprintf("0x%x manzilidan o'qishga urinish... (Exception #14 kutilmoqda)\n", addr);

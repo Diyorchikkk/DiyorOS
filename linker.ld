@@ -21,6 +21,11 @@ SECTIONS
         *(.rodata*)
     }
 
+    /* Shu yergacha — kod va o'zgarmas ma'lumot: paging ularni FAQAT O'QISH
+       uchun xaritaga kiritadi (v0.6.1). Undan keyin — yoziladigan ma'lumot. */
+    . = ALIGN(4K);
+    kernel_data_start = .;
+
     .data BLOCK(4K) : ALIGN(4K)
     {
         *(.data*)

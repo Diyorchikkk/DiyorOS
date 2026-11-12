@@ -93,6 +93,8 @@ typedef struct vfs_node {
         uint8_t  attr;
         char     short_name[11]; /* "SALOM   TXT" */
         bool     loaded;         /* papka ichidagilar diskdan o'qilganmi */
+        uint32_t hint_index;     /* oxirgi murojaat qilingan klaster: zanjirdagi tartib raqami... */
+        uint32_t hint_cluster;   /* ...va o'zi (ketma-ket o'qishni tezlashtiradi; 0 — yo'q) */
     } fat;
 } vfs_node_t;
 
@@ -142,6 +144,7 @@ int         vfs_close(int fd);
 const vfs_fd_t *vfs_fd_info(int fd);
 bool        vfs_fd_owned(int fd, uint32_t pid);
 void        vfs_close_owner(uint32_t pid);   /* jarayon tugaganda uning fayllarini yopish */
+int         vfs_fd_count(uint32_t pid);      /* jarayon ochgan fayllar soni */
 
 const char *vfs_strerror(int err);
 
@@ -162,7 +165,7 @@ typedef struct {
     uint32_t fat_sectors;
     uint32_t partition_lba;
 } fat32_stats_t;
-int         fat32_mount(vfs_node_t **root);          /* diskni o'qib, ildiz tugunini beradi */
+int         fat32_mount(vfs_node_t **out);           /* diskni o'qib, ildiz tugunini beradi */
 int         fat32_mkfs(const char *label);           /* diskni FAT32 da formatlash */
 void        fat32_stats(fat32_stats_t *st);
 
