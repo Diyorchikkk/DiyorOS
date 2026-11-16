@@ -58,9 +58,9 @@ OBJS     := $(patsubst src/%.s,$(BUILD)/%.o,$(ASM_SRC)) \
             $(BUILD)/initrd.o
 
 # ---- User dasturlar (v0.5) ----
-USER_PROGS   := hello guess primes hack isolate kundalik pi
+USER_PROGS   := hello guess primes hack isolate kundalik pi mandel ilon
 USER_BINS    := $(addprefix $(BUILD)/user/,$(USER_PROGS))
-USER_LIB     := $(BUILD)/user/crt0.o $(BUILD)/user/libc.o
+USER_LIB     := $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/ugfx.o $(BUILD)/user/font.o
 USER_CFLAGS  := $(ARCH_C) -std=gnu99 -ffreestanding -O2 -Wall -Wextra \
                 -fno-stack-protector -fno-asynchronous-unwind-tables \
                 -fno-builtin -Iinclude -Iuser
@@ -83,7 +83,12 @@ $(BUILD)/%.o: src/%.s
 	@mkdir -p $(dir $@)
 	$(CC) $(ARCH_C) -c $< -o $@
 
-$(BUILD)/user/%.o: user/%.c user/libc.h include/syscall_nums.h
+$(BUILD)/user/%.o: user/%.c user/libc.h user/ugfx.h include/syscall_nums.h
+	@mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+# Shrift kernel bilan umumiy: o'sha fayl dasturlar uchun ham kompilyatsiya qilinadi
+$(BUILD)/user/font.o: src/gfx/font.c include/gfx.h
 	@mkdir -p $(dir $@)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 

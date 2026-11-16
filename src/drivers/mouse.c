@@ -1,5 +1,5 @@
 /*
- * mouse.c — PS/2 sichqoncha drayveri (hozircha faqat g'ildirak).
+ * mouse.c — PS/2 sichqoncha drayveri.
  *
  * Sichqoncha klaviatura bilan bir xil kontrollerga (8042) ulangan.
  * Unga buyruq yuborish uchun avval 0x64 portiga 0xD4 yoziladi
@@ -13,6 +13,15 @@
  *
  * G'ildirak aylansa, klaviatura buferiga KEY_SCROLL_UP/DOWN kodlarini
  * qo'shamiz — shell ularni klaviatura tugmalari kabi qabul qiladi.
+ *
+ * v0.7: PAKET TO'LIQ O'QILADI
+ *   bayt 0:  bit0 chap tugma, bit1 o'ng, bit2 o'rta, bit3 doim 1,
+ *            bit4 X ishorasi, bit5 Y ishorasi, bit6/7 toshib ketish
+ *   bayt 1:  X bo'yicha siljish (9-bit ishorali son, 9-bit — bayt 0 dagi bit4)
+ *   bayt 2:  Y bo'yicha siljish (yuqoriga — musbat)
+ *   bayt 3:  g'ildirak (faqat IntelliMouse)
+ * Grafik rejimda oyna menejeri "ilgak" (hook) o'rnatadi va har bir paketni
+ * oladi; matn rejimida avvalgidek faqat g'ildirak ishlatiladi.
  */
 #include <stdint.h>
 #include "drivers.h"
@@ -24,6 +33,7 @@
 #define PS2_COMMAND 0x64
 #define LINES_PER_NOTCH 3      /* g'ildirakning bir "qadami" — 3 qator */
 
+static mouse_hook_t hook = 0;   /* grafik rejimda: oyna menejeri */
 static uint8_t packet[4];
 static int packet_index = 0;
 static int packet_size = 3;
@@ -84,15 +94,32 @@ static void mouse_handler(registers_t *r)
         return;
     packet_index = 0;
 
+    int z = 0;
     if (packet_size == 4) {
-        int8_t z = (int8_t)(packet[3] & 0x0F);
+        z = packet[3] & 0x0F;
         if (z & 0x08)
-            z |= (int8_t)0xF0;            /* 4-bitli manfiy sonni kengaytirish */
-        char key = z < 0 ? KEY_SCROLL_UP : KEY_SCROLL_DOWN;
-        if (z != 0)
-            for (int i = 0; i < LINES_PER_NOTCH; i++)
-                keyboard_inject(key);
+            z -= 16;                      /* 4-bitli manfiy sonni kengaytirish */
     }
+
+    if (hook) {
+        int dx = 0, dy = 0;
+        if (!(packet[0] & 0xC0)) {        /* toshib ketgan paketdagi siljish ishonchsiz */
+            dx = packet[1] - ((packet[0] & 0x10) ? 256 : 0);
+            dy = packet[2] - ((packet[0] & 0x20) ? 256 : 0);
+        }
+        hook(dx, -dy, z, packet[0] & 0x07);   /* ekranda Y pastga o'sadi — ishorani teskari */
+        return;
+    }
+
+    char key = z < 0 ? KEY_SCROLL_UP : KEY_SCROLL_DOWN;
+    if (z != 0)
+        for (int i = 0; i < LINES_PER_NOTCH; i++)
+            keyboard_inject(key);
+}
+
+void mouse_set_hook(mouse_hook_t h)
+{
+    hook = h;
 }
 
 int mouse_init(void)
@@ -122,6 +149,9 @@ int mouse_init(void)
     uint8_t id = mouse_read();
     packet_size = (id == 3 || id == 4) ? 4 : 3;
 
+    set_sample_rate(200);    /* sehrli ketma-ketlik 80 da qoldirgan: 200 paket/s — silliqroq */
+    mouse_write(0xE8);       /* aniqlik: 8 hisob / mm (eng yuqori) */
+    mouse_write(0x03);
     mouse_write(0xF4);       /* ma'lumot yuborishni boshlash */
 
     /* Kontrollerda qolib ketgan baytlarni tozalash */

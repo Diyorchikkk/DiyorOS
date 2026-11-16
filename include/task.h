@@ -95,7 +95,8 @@ void     task_reap_pid(uint32_t pid);
 void     task_yield(void);                 /* navbatni ixtiyoriy ravishda boshqaga berish */
 void     task_sleep_ticks(uint32_t ticks);
 void     task_block(void);                 /* joriy vazifani BLOCKED qilib, navbatni berish */
-void     task_unblock(task_t *t);          /* uzilish ichidan chaqirish mumkin */
+void     task_unblock(task_t *t);
+void     task_wake(task_t *t);          /* uxlayotgan yoki kutayotganni darhol uyg'otish (v0.7) */          /* uzilish ichidan chaqirish mumkin */
 
 task_t  *task_current(void);
 task_t  *task_get(int index);              /* jadvaldagi i-yozuv (ps uchun) */

@@ -33,8 +33,16 @@ void keyboard_cancel_waiter(void *task);   /* tugagan vazifa tugmani endi kutmay
 #define KEY_CTRL_L 0x0C
 #define KEY_CTRL_U 0x1D
 
-/* --- Sichqoncha (PS/2, IRQ12) — hozircha faqat g'ildirak --- */
+/* --- Sichqoncha (PS/2, IRQ12) --- */
 int  mouse_init(void);         /* 1 — g'ildirakli sichqoncha topildi */
+/* v0.7: grafik rejimda har bir paket shu funksiyaga beriladi (uzilish ichida!).
+   dx, dy — siljish (dy pastga musbat), dz — g'ildirak, buttons: bit0 chap, bit1 o'ng, bit2 o'rta */
+typedef void (*mouse_hook_t)(int dx, int dy, int dz, uint8_t buttons);
+void mouse_set_hook(mouse_hook_t hook);
+
+/* v0.7: klaviatura ilgagi. true qaytarsa — tugma "olindi" va shell buferiga tushmaydi */
+typedef int (*key_hook_t)(char key);
+void keyboard_set_hook(key_hook_t hook);
 
 /* --- Real vaqt soati (CMOS RTC) --- */
 typedef struct {

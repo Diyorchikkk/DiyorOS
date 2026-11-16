@@ -23,7 +23,12 @@
 #define SYS_SYSINFO  10   /* sysinfo(struct sysinfo *) */
 #define SYS_SETCOLOR 11   /* setcolor(rang)                  — matn rangi (0-15) */
 #define SYS_CLEAR    12   /* clear()                         — ekranni tozalash */
-#define SYS_COUNT    13
+/* v0.7: grafik oynalar (faqat grafik rejimda; aks holda -19 qaytaradi) */
+#define SYS_WIN_CREATE 13 /* win_create(nom, eni, bo'yi)     — oyna raqami */
+#define SYS_WIN_UPDATE 14 /* win_update(raqam, piksellar)    — eni*bo'yi ta 0x00RRGGBB ni ekranga */
+#define SYS_WIN_EVENT  15 /* win_event(raqam, struct gui_event *) — 1: hodisa bor, 0: yo'q */
+#define SYS_WIN_CLOSE  16 /* win_close(raqam) */
+#define SYS_COUNT    17
 
 /* open() flaglari (VFS dagi bilan bir xil) */
 #define O_READ    0x01
@@ -41,6 +46,22 @@ struct sysinfo {
     unsigned int user_pages;     /* shu jarayon egallagan sahifalar */
     char         os_name[16];
     char         os_version[8];
+};
+
+/* Oyna hodisalari (v0.7) */
+#define GUI_EV_NONE       0
+#define GUI_EV_KEY        1   /* key — belgi yoki maxsus kod (strelkalar: 0x11-0x18) */
+#define GUI_EV_MOUSE_DOWN 2   /* x, y — oyna ichidagi koordinata; buttons: 1 chap, 2 o'ng */
+#define GUI_EV_MOUSE_UP   3
+#define GUI_EV_MOUSE_MOVE 4
+#define GUI_EV_WHEEL      5   /* key — g'ildirak: -1 yuqoriga, +1 pastga */
+#define GUI_EV_CLOSE      6   /* foydalanuvchi oynaning [x] tugmasini bosdi */
+
+struct gui_event {
+    int type;
+    int x, y;
+    int key;
+    int buttons;
 };
 
 #endif

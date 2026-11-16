@@ -8,6 +8,18 @@
  */
 #include "libc.h"
 
+/* Har chaqiruvda stekdan ~1 KB oladi; 64 KB lik stek tugaganda Page Fault bo'ladi.
+   Cheksiz rekursiya bu yerda ataylab — kompilyator ogohlantirishini o'chiramiz */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Winfinite-recursion"
+static int overflow(int depth)
+{
+    volatile char pad[1024];
+    pad[0] = (char)depth;
+    return overflow(depth + 1) + pad[0];
+}
+#pragma GCC diagnostic pop
+
 static void test(int n)
 {
     switch (n) {
@@ -48,7 +60,7 @@ static void test(int n)
     }
     case 8:
         printf("Stekni to'ldirish (cheksiz rekursiya)...\n");
-        test(8);
+        overflow(1);
         break;
     default:
         printf("Bunday sinov yo'q\n");

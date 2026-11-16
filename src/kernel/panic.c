@@ -27,6 +27,7 @@
 #include "kernel.h"
 #include "task.h"
 #include "drivers.h"
+#include "fb.h"
 
 static bool in_panic = false;
 
@@ -72,6 +73,13 @@ static void panic_header(void)
     if (in_panic)                           /* panic ichida yana xato: cheksiz tsiklga tushmaymiz */
         halt_forever();
     in_panic = true;
+
+    /* Grafik rejimda bo'lsak — xabar ko'rinishi uchun darhol matn rejimiga qaytamiz.
+       Oyna menejeri endi ishlamaydi (uzilishlar o'chiq), shuning uchun bu yerda o'zimiz */
+    if (fb_info()->active) {
+        fb_emergency_text();
+        vga_redirect(false);
+    }
 
     vga_set_color(VGA_WHITE, VGA_RED);
     kprintf("\n\n  *** KERNEL PANIC ***                                                          \n");

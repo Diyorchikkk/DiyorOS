@@ -18,6 +18,8 @@ extern char boot_stack_bottom[];   /* boot.s: shell vazifasining steki */
 
 void kernel_main(uint32_t magic, multiboot_info_t *mbi);
 void shell_run(void);
+void power_reboot(void) __attribute__((noreturn));
+void power_off(void);          /* QEMU / Bochs da kompyuter o'chadi; haqiqiy kompyuterda qaytishi mumkin */
 void status_bar_refresh(void);
 
 /* Status bardagi fon vazifalari uchun ajratilgan ustunlar: [16, 29) */

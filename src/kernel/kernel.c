@@ -25,6 +25,8 @@
 #include "vfs.h"
 #include "ata.h"
 #include "klog.h"
+#include "pci.h"
+#include "fb.h"
 #include <stdarg.h>
 #include <stdbool.h>
 
@@ -158,6 +160,14 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
     boot_msg(true, "Kernel heap tayyor (kmalloc / kfree)");
 
     fpu_init();
+
+    pci_init();
+    boot_msg(true, "PCI shinasi: %d ta qurilma topildi", pci_count());
+    if (fb_detect())
+        boot_msg(true, "Videokarta: Bochs VBE, %u MB xotira (grafik rejim: gui)",
+                 fb_info()->vram_bytes / (1024 * 1024));
+    else
+        boot_msg(false, "Grafik adapter topilmadi (faqat matn rejimi)");
 
     bool have_disk = ata_init();
     if (have_disk)

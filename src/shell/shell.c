@@ -21,6 +21,8 @@
 #include "klog.h"
 #include "irq.h"
 #include "memory.h"
+#include "gui.h"
+#include "pci.h"
 
 #define LINE_MAX    256
 #define HISTORY_MAX 32
@@ -494,6 +496,54 @@ static void cmd_crash(const char *args)
     a = a / b;
 }
 
+/* Grafik rejimga o'tish (v0.7) */
+static void cmd_gui(const char *args)
+{
+    (void)args;
+    const char *err = gui_start();
+    if (err) {
+        vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+        kprintf("gui: %s\n", err);
+        normal();
+        return;
+    }
+    kprintf("Grafik rejim: 1024x768, 32 bit. Shell endi shu terminal oynasida.\n");
+    kprintf("Start menyusi: pastki chap burchakdagi 'DiyorOS' tugmasi.\n");
+}
+
+/* Sichqoncha tezligi (grafik rejim uchun) */
+static void cmd_mouse(const char *args)
+{
+    int32_t v;
+    const char *p = args;
+    if (*args && parse_int(&p, &v) && v >= 1 && v <= 10) {
+        gui_set_mouse_speed((int)v);
+        kprintf("Sichqoncha tezligi: %d (1 - eng sekin, 10 - eng tez)\n", gui_mouse_speed());
+        return;
+    }
+    if (*args) {
+        kprintf("Foydalanish: mouse <1-10>   (5 - standart)\n");
+        return;
+    }
+    kprintf("Sichqoncha tezligi: %d. O'zgartirish: mouse <1-10>\n", gui_mouse_speed());
+}
+
+/* PCI qurilmalari ro'yxati (Linux dagi lspci) */
+static void cmd_pci(const char *args)
+{
+    (void)args;
+    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    kprintf("JOYI     VENDOR:QURILMA  ISHLAB CHIQARUVCHI  TURI\n");
+    normal();
+    for (int i = 0; i < pci_count(); i++) {
+        const pci_device_t *d = pci_get(i);
+        kprintf("%02x:%02x.%u  %04x:%04x       %-18s  %s\n", d->bus, d->slot, d->func,
+                d->vendor, d->device, pci_vendor_name(d->vendor),
+                pci_class_name(d->class_code, d->subclass));
+    }
+    kprintf("Jami: %d ta qurilma\n", pci_count());
+}
+
 /* Kernel jurnali: yuklanishdan beri nima bo'lgani (klog.c) */
 static void cmd_dmesg(const char *args)
 {
@@ -511,24 +561,14 @@ static void cmd_reboot(const char *args)
 {
     (void)args;
     kprintf("Qayta yuklanmoqda...\n");
-    klog("reboot buyrug'i");
-    for (int i = 0; i < 100000 && (inb(0x64) & 0x02); i++)   /* klaviatura kontrolleri tayyor bo'lguncha */
-        ;
-    outb(0x64, 0xFE);            /* CPU ga reset signali */
-    for (;;)
-        __asm__ volatile ("hlt");
+    power_reboot();
 }
 
 static void cmd_shutdown(const char *args)
 {
     (void)args;
     kprintf("Tizim o'chirilmoqda...\n");
-    klog("shutdown buyrug'i");
-    vfs_chdir("/");
-    vfs_unmount("/disk");        /* disk toza uziladi: FSInfo ga bo'sh joy soni yoziladi */
-    outw(0x604, 0x2000);         /* QEMU (yangi versiyalar) ACPI o'chirish porti */
-    outw(0xB004, 0x2000);        /* Bochs / eski QEMU */
-    __asm__ volatile ("cli");
+    power_off();
     kprintf("Kompyuterni endi o'chirishingiz mumkin.\n");
     for (;;)
         __asm__ volatile ("hlt");
@@ -594,6 +634,9 @@ static const command_t commands[] = {
     { "kill",      CAT_TASKS,   "Vazifani to'xtatish: kill 3",                     cmd_kill      },
     { "sched",     CAT_TASKS,   "Scheduler statistikasi",                          cmd_sched     },
 
+    { "gui",       CAT_SYSTEM,  "Grafik rejim: oynalar, sichqoncha, dasturlar",    cmd_gui       },
+    { "mouse",     CAT_SYSTEM,  "Sichqoncha tezligi: mouse <1-10>",                cmd_mouse     },
+    { "pci",       CAT_SYSTEM,  "PCI qurilmalari ro'yxati",                        cmd_pci       },
     { "dmesg",     CAT_SYSTEM,  "Kernel jurnali (yuklanishdan beri xabarlar)",     cmd_dmesg     },
     { "crash",     CAT_SYSTEM,  "Panic sinovi: crash | stack | canary | heap",    cmd_crash     },
     { "pagefault", CAT_SYSTEM,  "Page Fault sinovi: pagefault | null | kod",       cmd_pagefault },
@@ -868,6 +911,16 @@ static void execute(char *line)
     char *cmd = (char *)skip_spaces(line);
     if (!*cmd)
         return;
+
+    /* "pi&" -> "pi &": & oldidan bo'sh joy shart bo'lmasin (v0.7) */
+    size_t n = strlen(cmd);
+    while (n > 0 && cmd[n - 1] == ' ')
+        cmd[--n] = 0;
+    if (n > 1 && cmd[n - 1] == '&' && cmd[n - 2] != ' ' && n + 1 < LINE_MAX - (size_t)(cmd - line)) {
+        cmd[n - 1] = ' ';
+        cmd[n] = '&';
+        cmd[n + 1] = 0;
+    }
 
     char *args = cmd;
     while (*args && *args != ' ')

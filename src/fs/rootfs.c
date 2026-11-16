@@ -56,7 +56,8 @@ void rootfs_init(void)
                "Salom! Bu DiyorOS dagi birinchi fayl.\n"
                "Uni tahrirlash uchun: edit salom.txt\n"
                "Dasturlar: ls /bin, keyin nomini yozing (masalan: hello)\n"
-               "Kernel jurnali: dmesg\n");
+               "Kernel jurnali: dmesg\n"
+               "Grafik rejim: gui\n");
 
     write_file("/home/diyorbek/rejalar.txt",
                "DiyorOS rejasi\n"
@@ -68,7 +69,7 @@ void rootfs_init(void)
                "v0.5  user mode, syscall, ELF dasturlar            [tayyor]\n"
                "v0.6  disk drayveri, FAT32                         [tayyor]\n"
                "v0.6.1 mustahkamlash: panic, jurnal, FPU, himoyalar [tayyor]\n"
-               "v0.7  grafika\n"
+               "v0.7  grafika: oynalar, sichqoncha, dasturlar      [tayyor]\n"
                "v0.8  sinxronizatsiya: mutex, semafor, pipe\n"
                "v1.0  diplom ishi\n");
 

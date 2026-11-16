@@ -379,6 +379,19 @@ void task_unblock(task_t *t)
     }
 }
 
+/*
+ * Uxlayotgan yoki kutayotgan vazifani DARHOL uyg'otish (v0.7). Uzilish ichidan
+ * chaqirilishi mumkin: masalan, sichqoncha siljiganda oyna menejeri taymerning
+ * keyingi tikini (10 ms gacha) kutmasdan ishga tushadi — kursor silliq yuradi.
+ */
+void task_wake(task_t *t)
+{
+    if (t && (t->state == TASK_SLEEPING || t->state == TASK_BLOCKED)) {
+        t->state = TASK_READY;
+        need_resched = true;
+    }
+}
+
 task_t *task_current(void)
 {
     return current;

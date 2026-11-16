@@ -19,6 +19,17 @@
  *     uchun holatni o'zgartiradigan har bir funksiya kritik seksiya.
  *   - Chiqarilgan har bir belgi serial portga ham yuboriladi (konsol nusxasi).
  *   - Kursorni o'qish/o'rnatish: shell qatorni o'rtasidan tahrirlashi uchun.
+ *
+ * v0.7: GRAFIK REJIMDA
+ * Grafik rejimda 0xB8000 xotirasi ekranga chiqmaydi. Shuning uchun shu
+ * fayldagi barcha funksiyalar endi "vga_buffer" ko'rsatkichi orqali yozadi:
+ *   - matn rejimida u 0xB8000 ga ishora qiladi (avvalgidek);
+ *   - grafik rejimda — oddiy xotiradagi "soya" massivga (shadow).
+ * Grafik terminal oynasi (gui/terminal.c) shu massivni o'qib, har bir
+ * katakni shrift bilan piksellarga chizadi. Shell, muharrir va dasturlar
+ * hech narsani sezmaydi: ular avvalgidek vga_putc / kprintf chaqiradi.
+ * Har bir o'zgarishda "generation" hisoblagichi oshadi — terminal oynasi
+ * faqat u o'zgarganda qayta chiziladi.
  */
 #include "vga.h"
 #include "io.h"
@@ -31,7 +42,14 @@
 #define SB_LINES   500                      /* tarixda saqlanadigan qatorlar */
 #define ROW_BYTES  (VGA_WIDTH * 2)
 
-static uint16_t *const vga_buffer = (uint16_t *)0xB8000;
+#define VGA_TEXT_MEMORY ((uint16_t *)0xB8000)
+
+static uint16_t *vga_buffer = VGA_TEXT_MEMORY;
+static uint16_t shadow[VGA_WIDTH * VGA_HEIGHT];   /* grafik rejimdagi ekran nusxasi */
+static bool redirected = false;
+static uint16_t soft_cursor_pos = 0;               /* grafik rejimdagi kursor joyi */
+static bool soft_cursor_on = true;
+static volatile uint32_t generation = 0;           /* har o'zgarishda +1 */
 static int cursor_row = TEXT_TOP;
 static int cursor_col = 0;
 static uint8_t current_color = VGA_LIGHT_GREY | (VGA_BLACK << 4);
@@ -57,6 +75,11 @@ static inline uint16_t *screen_row(int row)
 static void update_hw_cursor(void)
 {
     uint16_t pos = (uint16_t)(cursor_row * VGA_WIDTH + cursor_col);
+    generation++;                            /* ekran yoki kursor o'zgardi */
+    if (redirected) {
+        soft_cursor_pos = pos;
+        return;
+    }
     outb(0x3D4, 0x0F);
     outb(0x3D5, (uint8_t)(pos & 0xFF));
     outb(0x3D4, 0x0E);
@@ -65,6 +88,10 @@ static void update_hw_cursor(void)
 
 static void enable_hw_cursor(void)
 {
+    soft_cursor_on = true;
+    generation++;
+    if (redirected)
+        return;
     outb(0x3D4, 0x0A);
     outb(0x3D5, (inb(0x3D5) & 0xC0) | 13);   /* kursor boshlanish chizig'i */
     outb(0x3D4, 0x0B);
@@ -73,6 +100,10 @@ static void enable_hw_cursor(void)
 
 static void disable_hw_cursor(void)
 {
+    soft_cursor_on = false;
+    generation++;
+    if (redirected)
+        return;
     outb(0x3D4, 0x0A);
     outb(0x3D5, 0x20);                       /* 5-bit: kursorni yashirish */
 }
@@ -131,6 +162,7 @@ static void scroll_view_locked(int delta)
     } else {
         render_view();
     }
+    generation++;
 }
 
 void vga_scroll_view(int delta)
@@ -300,6 +332,7 @@ void vga_write_at(int x, int y, const char *s, uint8_t fg, uint8_t bg)
         return;
     while (*s && x < VGA_WIDTH)
         vga_buffer[y * VGA_WIDTH + x++] = vga_entry(*s++, color);
+    generation++;
 }
 
 /* ---------------- To'liq ekranli dasturlar uchun (v0.4: matn muharriri) ---------------- */
@@ -335,14 +368,64 @@ void vga_put_at(int x, int y, char c, uint8_t fg, uint8_t bg)
     if (x < 0 || x >= VGA_WIDTH || y < 0 || y >= VGA_HEIGHT)
         return;
     vga_buffer[y * VGA_WIDTH + x] = vga_entry(c, (fg & 0x0F) | ((bg & 0x0F) << 4));
+    generation++;
 }
 
 /* Faqat apparat kursorini ko'chirish (matn chiqarish joyiga ta'sir qilmaydi) */
 void vga_move_hw_cursor(int x, int y)
 {
     uint16_t pos = (uint16_t)(y * VGA_WIDTH + x);
+    generation++;
+    if (redirected) {
+        soft_cursor_pos = pos;
+        return;
+    }
     outb(0x3D4, 0x0F);
     outb(0x3D5, (uint8_t)(pos & 0xFF));
     outb(0x3D4, 0x0E);
     outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
+}
+
+/* ------------------------ Grafik rejim uchun (v0.7) ------------------------ */
+
+/* on = true: ekran matni soya massivga ko'chadi, keyingi yozuvlar o'sha yerga boradi.
+   on = false: soya massiv 0xB8000 ga qaytariladi (matn rejimi tiklangandan keyin) */
+void vga_redirect(bool on)
+{
+    uint32_t f = irq_save();
+    if (on && !redirected) {
+        memcpy(shadow, VGA_TEXT_MEMORY, sizeof(shadow));
+        vga_buffer = shadow;
+        redirected = true;
+        soft_cursor_pos = (uint16_t)(cursor_row * VGA_WIDTH + cursor_col);
+    } else if (!on && redirected) {
+        memcpy(VGA_TEXT_MEMORY, shadow, sizeof(shadow));
+        vga_buffer = VGA_TEXT_MEMORY;
+        redirected = false;
+        if (soft_cursor_on)
+            enable_hw_cursor();
+        else
+            disable_hw_cursor();
+        outb(0x3D4, 0x0F);
+        outb(0x3D5, (uint8_t)(soft_cursor_pos & 0xFF));
+        outb(0x3D4, 0x0E);
+        outb(0x3D5, (uint8_t)(soft_cursor_pos >> 8));
+    }
+    generation++;
+    irq_restore(f);
+}
+
+uint32_t vga_generation(void)
+{
+    return generation;
+}
+
+/* Ekrandagi barcha kataklarni (80x25) va kursorni nusxalash — terminal oynasi uchun */
+void vga_snapshot(uint16_t *cells, int *cursor_pos, bool *cursor_visible)
+{
+    uint32_t f = irq_save();
+    memcpy(cells, (const void *)vga_buffer, sizeof(shadow));
+    *cursor_pos = soft_cursor_pos;
+    *cursor_visible = soft_cursor_on && view_offset == 0;
+    irq_restore(f);
 }

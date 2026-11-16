@@ -35,6 +35,11 @@ void    vga_move_hw_cursor(int x, int y);
 /* v0.6.1: matn kursori (shell qator tahriri uchun) va serial nusxa */
 void    vga_get_cursor(int *x, int *y);
 void    vga_set_cursor(int x, int y);
-void    vga_putc_local(char c);   /* serial portga nusxalamasdan */
+void    vga_putc_local(char c);
+
+/* v0.7: grafik rejimda matn konsoli xotiradagi nusxaga yoziladi */
+void     vga_redirect(bool on);
+uint32_t vga_generation(void);
+void     vga_snapshot(uint16_t *cells, int *cursor_pos, bool *cursor_visible);   /* serial portga nusxalamasdan */
 
 #endif

@@ -25,6 +25,7 @@
 #include "config.h"
 #include "kprintf.h"
 #include "klog.h"
+#include "gui.h"
 
 #define EFAULT     (-14)          /* noto'g'ri ko'rsatkich */
 #define ENOSYS     (-38)          /* bunday syscall yo'q */
@@ -209,6 +210,36 @@ static int32_t sys_sysinfo(uint32_t ptr)
     return 0;
 }
 
+/* ------------------------- Grafik oynalar (v0.7) ------------------------- */
+
+static int32_t sys_win_create(uint32_t utitle, uint32_t w, uint32_t h)
+{
+    char title[40];
+    if (!copy_string(title, utitle, sizeof(title)))
+        return EFAULT;
+    if (w > 4096 || h > 4096)
+        return -22;
+    return gui_sys_create(title, (int)w, (int)h);
+}
+
+static int32_t sys_win_update(uint32_t id, uint32_t upixels)
+{
+    int w, h;
+    if (!gui_sys_window_size((int)id, &w, &h))
+        return -2;
+    /* Dastur bergan bufer butunligicha o'zining xotirasida bo'lishi shart */
+    if (!user_ok(upixels, (uint32_t)w * (uint32_t)h * 4, false))
+        return EFAULT;
+    return gui_sys_update((int)id, (const uint32_t *)upixels);
+}
+
+static int32_t sys_win_event(uint32_t id, uint32_t uev)
+{
+    if (!user_ok(uev, sizeof(struct gui_event), true))
+        return EFAULT;
+    return gui_sys_event((int)id, (struct gui_event *)uev);
+}
+
 void syscall_handler(registers_t *r)
 {
     uint32_t a = r->ebx, b = r->ecx, c = r->edx;
@@ -228,6 +259,10 @@ void syscall_handler(registers_t *r)
     case SYS_SYSINFO:  ret = sys_sysinfo(a); break;
     case SYS_SETCOLOR: vga_set_color(a & 0x0F, VGA_BLACK); ret = 0; break;
     case SYS_CLEAR:    vga_clear(); ret = 0; break;
+    case SYS_WIN_CREATE: ret = sys_win_create(a, b, c); break;
+    case SYS_WIN_UPDATE: ret = sys_win_update(a, b); break;
+    case SYS_WIN_EVENT:  ret = sys_win_event(a, b); break;
+    case SYS_WIN_CLOSE:  ret = gui_sys_close((int)a); break;
     default:
         klog("PID %u (%s): noma'lum syscall %u", task_current()->pid, task_current()->name, r->eax);
         ret = ENOSYS;

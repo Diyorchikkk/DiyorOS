@@ -33,6 +33,19 @@ int      sysinfo(struct sysinfo *info);
 void     setcolor(int color);
 void     clear(void);
 
+/* Grafik oynalar (v0.7) — faqat grafik rejimda ('gui' buyrug'idan keyin) ishlaydi */
+int      win_create(const char *title, int w, int h);       /* oyna raqami, manfiy — xato */
+int      win_update(int id, const unsigned *pixels);        /* eni*bo'yi ta piksel (0x00RRGGBB) */
+int      win_event(int id, struct gui_event *ev);           /* 1 — hodisa bor, 0 — yo'q, manfiy — oyna yo'q */
+int      win_close(int id);
+
+/* Maxsus tugmalar (GUI_EV_KEY dagi key) */
+#define KEY_UP     0x11
+#define KEY_DOWN   0x12
+#define KEY_LEFT   0x17
+#define KEY_RIGHT  0x18
+#define KEY_ESC    0x1B
+
 /* Satrlar va xotira */
 size_t   strlen(const char *s);
 int      strcmp(const char *a, const char *b);

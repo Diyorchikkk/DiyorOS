@@ -9,6 +9,10 @@
  * Belgilar aylanma buferga (ring buffer) yoziladi, shell esa
  * keyboard_getchar() orqali ulardan o'qiydi. Bu "producer–consumer"
  * modelining oddiy misoli: uzilish yozadi, shell o'qiydi.
+ *
+ * v0.7: grafik rejimda tugma avval oyna menejeriga beriladi (key_hook).
+ * Faol oyna terminal bo'lmasa (masalan, o'yin), tugma o'sha oynaga ketadi va
+ * shell uni ko'rmaydi.
  */
 #include <stdint.h>
 #include <stdbool.h>
@@ -44,6 +48,8 @@ static volatile uint32_t head = 0, tail = 0;   /* head — yozish, tail — o'qi
 
 static task_t *waiter = 0;       /* tugma kutib BLOCKED bo'lgan vazifa */
 
+static key_hook_t key_hook = 0;
+
 static bool shift = false;
 static bool ctrl = false;
 static bool caps_lock = false;
@@ -60,6 +66,19 @@ static void buffer_push(char c)
         task_unblock(waiter);
         waiter = 0;
     }
+}
+
+/* Klaviaturadan kelgan tugma: avval ilgakka, u olmasa — buferga */
+static void deliver(char c)
+{
+    if (key_hook && key_hook(c))
+        return;
+    buffer_push(c);
+}
+
+void keyboard_set_hook(key_hook_t hook)
+{
+    key_hook = hook;
 }
 
 static void keyboard_handler(registers_t *r)
@@ -83,16 +102,16 @@ static void keyboard_handler(registers_t *r)
         }
         if (released)
             return;
-        if (sc == 0x48) buffer_push(shift ? KEY_SCROLL_UP : KEY_UP);
-        else if (sc == 0x50) buffer_push(shift ? KEY_SCROLL_DOWN : KEY_DOWN);
-        else if (sc == 0x4B) buffer_push(KEY_LEFT);
-        else if (sc == 0x4D) buffer_push(KEY_RIGHT);
-        else if (sc == 0x47) buffer_push(KEY_HOME);
-        else if (sc == 0x4F) buffer_push(KEY_END);
-        else if (sc == 0x53) buffer_push(KEY_DELETE);
-        else if (sc == 0x49) buffer_push(KEY_PGUP);
-        else if (sc == 0x51) buffer_push(KEY_PGDN);
-        else if (sc == 0x1C) buffer_push('\n');   /* numpad Enter */
+        if (sc == 0x48) deliver(shift ? KEY_SCROLL_UP : KEY_UP);
+        else if (sc == 0x50) deliver(shift ? KEY_SCROLL_DOWN : KEY_DOWN);
+        else if (sc == 0x4B) deliver(KEY_LEFT);
+        else if (sc == 0x4D) deliver(KEY_RIGHT);
+        else if (sc == 0x47) deliver(KEY_HOME);
+        else if (sc == 0x4F) deliver(KEY_END);
+        else if (sc == 0x53) deliver(KEY_DELETE);
+        else if (sc == 0x49) deliver(KEY_PGUP);
+        else if (sc == 0x51) deliver(KEY_PGDN);
+        else if (sc == 0x1C) deliver('\n');   /* numpad Enter */
         return;
     }
 
@@ -112,6 +131,8 @@ static void keyboard_handler(registers_t *r)
     }
 
     if (ctrl && sc == 0x2E) {              /* Ctrl+C */
+        if (key_hook && key_hook(KEY_CTRL_C))
+            return;                              /* grafik oyna (o'yin) uchun — dastur o'ldirilmaydi */
         uint32_t fg = task_foreground();
         if (fg)
             task_signal_kill(fg, EXIT_CTRL_C);   /* oldingi plandagi dasturni to'xtatish */
@@ -130,7 +151,7 @@ static void keyboard_handler(registers_t *r)
         case 'l': code = KEY_CTRL_L; break;      /* ekranni tozalash */
         }
         if (code)
-            buffer_push(code);
+            deliver(code);
         return;                                  /* boshqa Ctrl+tugma — e'tiborsiz */
     }
 
@@ -140,7 +161,7 @@ static void keyboard_handler(registers_t *r)
         else if (c >= 'A' && c <= 'Z') c += 32;
     }
     if (c)
-        buffer_push(c);
+        deliver(c);
 }
 
 void keyboard_init(void)

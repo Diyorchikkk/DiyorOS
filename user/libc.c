@@ -34,6 +34,12 @@ int      sysinfo(struct sysinfo *info)                { return syscall3(SYS_SYSI
 void     setcolor(int color)                          { syscall3(SYS_SETCOLOR, color, 0, 0); }
 void     clear(void)                                  { syscall3(SYS_CLEAR, 0, 0, 0); }
 
+/* v0.7: grafik oynalar */
+int win_create(const char *title, int w, int h)        { return syscall3(SYS_WIN_CREATE, (int)title, w, h); }
+int win_update(int id, const unsigned *pixels)         { return syscall3(SYS_WIN_UPDATE, id, (int)pixels, 0); }
+int win_event(int id, struct gui_event *ev)            { return syscall3(SYS_WIN_EVENT, id, (int)ev, 0); }
+int win_close(int id)                                  { return syscall3(SYS_WIN_CLOSE, id, 0, 0); }
+
 /* ---------------------------- Satrlar, xotira ---------------------------- */
 
 size_t strlen(const char *s)

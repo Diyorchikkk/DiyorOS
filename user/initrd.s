@@ -35,6 +35,8 @@ initrd_table:
     ENTRY isolate
     ENTRY kundalik
     ENTRY pi
+    ENTRY mandel
+    ENTRY ilon
     .long 0, 0, 0              # ro'yxat oxiri
 
     BLOB hello
@@ -44,5 +46,7 @@ initrd_table:
     BLOB isolate
     BLOB kundalik
     BLOB pi
+    BLOB mandel
+    BLOB ilon
 
 .section .note.GNU-stack, "", @progbits

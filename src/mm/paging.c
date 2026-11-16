@@ -21,6 +21,7 @@
  *   - 0-sahifa (0x0–0xFFF) ataylab xaritaga kiritilmagan: NULL pointer
  *     ishlatilsa, darhol Page Fault bo'ladi va xato topiladi.
  *   - 0xD0000000 dan boshlab — kernel heap (kheap.c).
+ *   - 0xE0000000 dan boshlab — framebuffer, ekran piksellari (v0.7, fb.c).
  *   - v0.6.1: kernelning KODI va o'zgarmas ma'lumotlari (.text, .rodata) FAQAT
  *     O'QISH uchun. Xato ko'rsatkich kernel kodini buzib qo'ya olmaydi —
  *     yozishga urinish darhol Page Fault beradi ("W^X" tamoyili: xotira yo
@@ -41,6 +42,7 @@
 #include "kernel.h"
 #include "klog.h"
 #include "cpu.h"
+#include "fb.h"
 
 static uint32_t *kernel_directory = 0;
 static uint32_t *current_directory = 0;
@@ -149,6 +151,12 @@ void paging_init(void)
     for (uint32_t addr = HEAP_START; addr < HEAP_MAX; addr += 0x400000)
         if (!get_table(kernel_directory, addr, true, 0))
             panic("paging_init: heap jadvallari uchun xotira yetmadi");
+
+    /* v0.7: framebuffer hududi (16 MB) uchun ham xuddi shunday — grafik rejim keyin
+       yoqilsa ham, oldin yaratilgan jarayonlar ekran xotirasini "ko'radi" */
+    for (uint32_t addr = FB_VIRT; addr < FB_VIRT + FB_MAX_SIZE; addr += 0x400000)
+        if (!get_table(kernel_directory, addr, true, 0))
+            panic("paging_init: framebuffer jadvallari uchun xotira yetmadi");
 
     /* Shell steki ostidagi qo'riqchi sahifa: xaritada yo'q — stek to'lsa darhol xato */
     table_entry_clear((uint32_t)boot_stack_guard);

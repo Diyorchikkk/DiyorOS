@@ -1,8 +1,10 @@
-# DiyorOS v0.6.1
+# DiyorOS v0.7
 
 C va Assembly'da noldan yozilgan operatsion tizim. Arxitektura: x86, 32-bit protected mode.
 Linux, Windows yoki boshqa OS kodidan foydalanilmagan: kompyuter yoqilgandan keyin ekranga chiqadigan
 hamma narsani shu kod boshqaradi.
+
+![DiyorOS grafik rejimi](docs/gui.png)
 
 Nimalari bor:
 
@@ -13,7 +15,9 @@ Nimalari bor:
 - **Drayverlar**: VGA matn rejimi, PS/2 klaviatura va sichqoncha, PIT taymer, CMOS soati, ATA disk, serial port
 - **Ishonchlilik**: kernel panic (backtrace bilan), kernel jurnali (`dmesg`), stek va heap qo'riqchilari,
   faqat o'qiladigan kernel kodi, Double Fault uchun alohida stek, FPU kontekstini saqlash
-- **Shell**: 45 ta buyruq, qator tahriri, tarix, Tab bilan to'ldirish, matn muharriri
+- **Grafik interfeys** (v0.7): 1024x768, oyna menejeri va kompozitor, sichqoncha, vazifalar paneli,
+  Start menyusi; Terminal, Fayllar, Tizim monitori, Chizish; ring 3 dagi grafik dasturlar (Mandelbrot, Ilon)
+- **Shell**: 48 ta buyruq, qator tahriri, tarix, Tab bilan to'ldirish, matn muharriri
 
 ---
 
@@ -77,6 +81,8 @@ qaytarish: **Ctrl + Option + G**.
 | `pagefault kod` | Kernel o'z kodiga yoza olmaydi (faqat o'qish uchun) |
 | `crash stack` | Stek to'lib ketishi → Double Fault → toza *kernel panic* (qayta yuklanib ketmaydi) |
 | `crash heap` | Buzilgan heap aniqlanadi |
+| `pci` | PCI qurilmalari: videokarta, disk kontrolleri |
+| `gui` | **Grafik rejim**: oynalar, sichqoncha, dasturlar — batafsil: [docs/v0.7-grafika.md](docs/v0.7-grafika.md) |
 
 Har bir bosqichning batafsil demo ketma-ketligi va himoya savollari `docs/` papkasida.
 
@@ -95,6 +101,7 @@ DiyorOS/
 ├── grub.cfg              ISO uchun GRUB sozlamasi
 ├── include/              sarlavha (.h) fayllar
 ├── docs/                 har bir bosqich bo'yicha tushuntirish va himoya savollari
+├── tools/mkfont.py       shrift faylini yaratish
 ├── src/
 │   ├── boot/
 │   │   ├── boot.s        Multiboot header, stek (qo'riqchi sahifa bilan), kernel_main ga o'tish
@@ -107,13 +114,16 @@ DiyorOS/
 │   │   ├── process.c     ELF yuklovchi, dastur xatolarini ushlash
 │   │   ├── syscall.c     tizim chaqiruvlari, int 0x80
 │   │   ├── panic.c       kernel panic, backtrace, Double Fault (v0.6.1)
-│   │   └── klog.c        kernel jurnali — dmesg (v0.6.1)
+│   │   ├── klog.c        kernel jurnali — dmesg (v0.6.1)
+│   │   └── power.c       o'chirish va qayta yuklash
 │   ├── drivers/
 │   │   ├── vga.c         ekran (0xB8000), scrollback, kursor
 │   │   ├── serial.c      serial port COM1 — konsol nusxasi (v0.6.1)
+│   │   ├── pci.c         PCI shinasi: qurilmalarni topish (v0.7)
+│   │   ├── fb.c          grafik rejim (Bochs VBE), matn rejimiga qaytish (v0.7)
 │   │   ├── timer.c       PIT taymer, IRQ0
 │   │   ├── keyboard.c    PS/2 klaviatura, IRQ1, ring buffer
-│   │   ├── mouse.c       PS/2 sichqoncha g'ildiragi, IRQ12
+│   │   ├── mouse.c       PS/2 sichqoncha: harakat, tugmalar, g'ildirak, IRQ12
 │   │   ├── ata.c         ATA (IDE) qattiq disk, PIO
 │   │   └── rtc.c         CMOS real vaqt soati
 │   ├── mm/
@@ -126,6 +136,18 @@ DiyorOS/
 │   │   ├── procfs.c      /proc virtual fayllari
 │   │   ├── fat32.c       FAT32: diskdagi fayl tizimi
 │   │   └── rootfs.c      yuklanishda papka va fayllarni yaratish
+│   ├── gfx/              2D grafika (v0.7)
+│   │   ├── gfx.c         sirtlar, to'rtburchak, chiziq, matn, BMP
+│   │   └── font.c        8x16 shrift (tools/mkfont.py yaratadi)
+│   ├── gui/              grafik interfeys (v0.7)
+│   │   ├── wm.c          oyna menejeri, kompozitor, panel, menyu, oyna syscall lari
+│   │   ├── terminal.c    shell uchun grafik terminal
+│   │   ├── files.c       Fayllar
+│   │   ├── viewer.c      matn va rasm ko'ruvchi
+│   │   ├── monitor.c     Tizim monitori
+│   │   ├── paint.c       Chizish
+│   │   ├── apps.c        Haqida, dasturlarni ishga tushirish
+│   │   └── widgets.c     tugmalar, ikonkalar
 │   ├── lib/
 │   │   ├── string.c      memset, memcpy, strcmp... (libc yo'q)
 │   │   └── kprintf.c     printf'ning kernel varianti
@@ -139,9 +161,10 @@ DiyorOS/
 └── user/                 dasturlar — ring 3 da ishlaydi, /bin ga tushadi
     ├── crt0.s            dastur boshlanishi: main(argc, argv)
     ├── libc.c            printf, malloc, readline, syscall o'ramlari
+    ├── ugfx.c            dasturlar uchun kichik grafika kutubxonasi (v0.7)
     ├── linker.ld         dasturlar 0x40000000 dan joylashadi
     ├── initrd.s          dasturlarni kernel ichiga joylash
-    └── hello.c guess.c primes.c hack.c isolate.c kundalik.c pi.c
+    └── hello.c guess.c primes.c hack.c isolate.c kundalik.c pi.c mandel.c ilon.c
 ```
 
 ---
@@ -186,7 +209,7 @@ protsessor boshqa vazifalarga beriladi.
   o'ldiriladi ("Segmentation fault"). Kernelning o'zi xato qilsa — *kernel panic*: tizim to'xtaydi,
   chunki buzilgan kernel bilan davom etish ma'lumotlarni yo'qotishi mumkin.
 
-Har bir bosqichga oid savollar: `docs/v0.2-xotira.md` ... `docs/v0.6.1-mustahkamlash.md`.
+Har bir bosqichga oid savollar: `docs/v0.2-xotira.md` ... `docs/v0.7-grafika.md`.
 
 ---
 
@@ -201,7 +224,7 @@ Har bir bosqichga oid savollar: `docs/v0.2-xotira.md` ... `docs/v0.6.1-mustahkam
 | **v0.5** ✅ | User mode (ring 3), syscall, ELF, libc — [batafsil](docs/v0.5-user-mode.md) | Himoya, tizim chaqiruvlari |
 | **v0.6** ✅ | ATA disk, FAT32, `/disk` — [batafsil](docs/v0.6-disk-fat32.md) | Kiritish-chiqarish, disklar |
 | **v0.6.1** ✅ | Kod tekshiruvi: 20+ xato tuzatildi; panic, jurnal, serial, FPU, himoyalar — [batafsil](docs/v0.6.1-mustahkamlash.md) | Ishonchlilik, race condition |
-| v0.7 | Grafik rejim (VESA), shriftlar, sichqoncha kursori, oynalar | Grafik quyi tizim |
+| **v0.7** ✅ | Grafik rejim, PCI, oyna menejeri, sichqoncha, 7 ta grafik dastur, oyna syscall lari — [batafsil](docs/v0.7-grafika.md) | Grafik quyi tizim, I/O |
 | v0.8 | Mutex, semafor, pipe, `exec`/`wait` | Sinxronizatsiya, IPC |
 | v1.0 | Haqiqiy kompyuterda yuklash, testlar, diplom matni | — |
 
