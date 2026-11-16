@@ -35,7 +35,10 @@ typedef enum {
 
 typedef void (*task_entry_t)(uint32_t arg);
 
-typedef struct {
+struct wait_queue;
+struct mutex;
+
+typedef struct task {
     uint32_t     pid;
     char         name[TASK_NAME_LEN];
     task_state_t state;
@@ -64,12 +67,28 @@ typedef struct {
     uint32_t    *stack_guard;   /* stekning eng tubi: u yerda STACK_CANARY turishi shart */
     bool         fpu_used;      /* dastur FPU (suzuvchi nuqta) ishlatganmi */
     uint8_t      fpu_state[FPU_STATE_SIZE];   /* boshqa dastur FPU ni olganda saqlangan holat */
+
+    /* v0.8: sinxronizatsiya */
+    struct task       *wq_next;       /* kutish navbatidagi keyingi vazifa */
+    struct wait_queue *wait_queue;    /* qaysi navbatda kutyapti (0 — hech qaysi) */
+    const char        *wait_reason;   /* nimani kutyapti: "mutex", "pipe", ... (ps uchun) */
+    struct mutex      *waiting_mutex; /* qaysi mutexni kutyapti (deadlock aniqlash uchun) */
+
+    /* v0.8: signal — xavfsiz to'xtatish */
+    volatile bool      kill_pending;  /* to'xtatish so'ralgan: user rejimga qaytishda tugaydi */
+    int32_t            kill_code;
+
+    /* v0.8: jarayon guruhi va standart kirish/chiqish */
+    uint32_t           pgid;          /* quvurdagi (a | b | c) barcha jarayonlar bitta guruhda */
+    int                fd_in;         /* stdin: -1 — klaviatura, aks holda VFS fd (pipe) */
+    int                fd_out;        /* stdout: -1 — ekran */
 } task_t;
 
 #define EXIT_KILLED   (-9)      /* kill buyrug'i bilan */
 #define EXIT_CTRL_C   (-2)      /* Ctrl+C bilan */
 #define EXIT_FAULT    (-11)     /* xato (Segmentation fault) */
 #define EXIT_TTIN     (-21)     /* fon jarayoni klaviaturadan o'qimoqchi bo'ldi */
+#define EXIT_PIPE     (-13)     /* o'quvchisi yo'q pipe ga yozdi (Unix: SIGPIPE) */
 
 /* Ishga tushirish: joriy oqim (shell) 1-vazifaga aylanadi, idle yaratiladi */
 void     sched_init(void);
@@ -82,10 +101,22 @@ void     task_exit(void);                  /* joriy vazifani tugatish (kod 0) */
 void     task_exit_code(int32_t code);
 
 /* v0.5: user jarayonlar */
+/* v0.8: yangi jarayonning stdin/stdout va guruhi (0 / -1 — standart) */
+typedef struct {
+    int      fd_in;
+    int      fd_out;
+    uint32_t pgid;
+    bool     foreground;    /* yaratilishi bilan oldingi planga (klaviatura, Ctrl+C) */
+} spawn_opts_t;
+
 uint32_t task_create_user(const char *name, uint32_t *page_dir, uint32_t entry,
-                          uint32_t user_esp, uint32_t brk, uint32_t pages);
+                          uint32_t user_esp, uint32_t brk, uint32_t pages,
+                          const spawn_opts_t *opts);
 int32_t  task_wait(uint32_t pid);          /* jarayon tugashini kutish, chiqish kodini qaytaradi */
 void     task_signal_kill(uint32_t pid, int32_t code);   /* uzilish ichidan ham (Ctrl+C) */
+void     task_signal_group(uint32_t pgid, int32_t code); /* guruhdagi barcha jarayonlarga (v0.8) */
+bool     task_should_abort(void);          /* joriy user jarayonni to'xtatish so'ralganmi (v0.8) */
+void     task_check_signals(registers_t *r);   /* user rejimga qaytishdan oldin (idt.c) */
 task_t  *task_find(uint32_t pid);
 void     task_set_foreground(uint32_t pid);
 uint32_t task_foreground(void);
@@ -96,7 +127,7 @@ void     task_yield(void);                 /* navbatni ixtiyoriy ravishda boshqa
 void     task_sleep_ticks(uint32_t ticks);
 void     task_block(void);                 /* joriy vazifani BLOCKED qilib, navbatni berish */
 void     task_unblock(task_t *t);
-void     task_wake(task_t *t);          /* uxlayotgan yoki kutayotganni darhol uyg'otish (v0.7) */          /* uzilish ichidan chaqirish mumkin */
+void     task_wake(task_t *t);          /* uxlayotgan yoki kutayotganni darhol uyg'otish (v0.7) */
 
 task_t  *task_current(void);
 task_t  *task_get(int index);              /* jadvaldagi i-yozuv (ps uchun) */

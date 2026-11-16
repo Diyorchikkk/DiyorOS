@@ -1,4 +1,4 @@
-# DiyorOS v0.7
+# DiyorOS v0.8
 
 C va Assembly'da noldan yozilgan operatsion tizim. Arxitektura: x86, 32-bit protected mode.
 Linux, Windows yoki boshqa OS kodidan foydalanilmagan: kompyuter yoqilgandan keyin ekranga chiqadigan
@@ -10,7 +10,10 @@ Nimalari bor:
 
 - **Yuklanish**: Multiboot (QEMU `-kernel` yoki GRUB ISO), GDT, IDT, PIC, TSS
 - **Xotira**: fizik xotira menejeri (bitmap), paging, har bir jarayonga alohida manzil maydoni, kernel heap
-- **Jarayonlar**: preemptive Round-Robin scheduler, kernel oqimlari, ring 3 dagi dasturlar (ELF), syscall'lar
+- **Jarayonlar**: preemptive Round-Robin scheduler, kernel oqimlari, ring 3 dagi dasturlar (ELF), syscall'lar,
+  dasturdan dastur ishga tushirish (`spawn`/`wait`), signal (Ctrl+C butun jarayon guruhiga)
+- **Sinxronizatsiya va IPC** (v0.8): mutex (deadlock aniqlash bilan), semafor, kutish navbatlari, kanallar
+  (`ls | grep o | wc`), `>` `>>` `<` yo'naltirish; syscall'lar ichida ham uzilishlar yoqiq (preemptive kernel)
 - **Fayl tizimlari**: VFS, ramfs, procfs (`/proc`), FAT32 (diskda, uzun nomlar bilan)
 - **Drayverlar**: VGA matn rejimi, PS/2 klaviatura va sichqoncha, PIT taymer, CMOS soati, ATA disk, serial port
 - **Ishonchlilik**: kernel panic (backtrace bilan), kernel jurnali (`dmesg`), stek va heap qo'riqchilari,
@@ -83,6 +86,8 @@ qaytarish: **Ctrl + Option + G**.
 | `crash heap` | Buzilgan heap aniqlanadi |
 | `pci` | PCI qurilmalari: videokarta, disk kontrolleri |
 | `gui` | **Grafik rejim**: oynalar, sichqoncha, dasturlar — batafsil: [docs/v0.7-grafika.md](docs/v0.7-grafika.md) |
+| `ls /bin \| grep o \| wc`, `sanoq 100 > /disk/son.txt`, `ota` | **Kanallar, yo'naltirish, spawn/wait** |
+| `sinx poyga`, `sinx ishlab`, `sinx deadlock`, `sinx faylasuflar` | **Sinxronizatsiya**: race condition, producer-consumer, deadlock — batafsil: [docs/v0.8-sinxronizatsiya.md](docs/v0.8-sinxronizatsiya.md) |
 
 Har bir bosqichning batafsil demo ketma-ketligi va himoya savollari `docs/` papkasida.
 
@@ -110,7 +115,8 @@ DiyorOS/
 │   │   ├── kernel.c      asosiy funksiya: hamma qismni tartib bilan ishga tushiradi
 │   │   ├── gdt.c         segmentlar (ring 0 / ring 3), TSS, Double Fault TSS
 │   │   ├── idt.c         uzilishlar jadvali, PIC, soxta IRQ, exception'larni taqsimlash
-│   │   ├── task.c        vazifalar, scheduler, stek qo'riqchisi, FPU konteksti
+│   │   ├── task.c        vazifalar, scheduler, signal, stek qo'riqchisi, FPU konteksti
+│   │   ├── sync.c        kutish navbati, mutex (deadlock aniqlash), semafor (v0.8)
 │   │   ├── process.c     ELF yuklovchi, dastur xatolarini ushlash
 │   │   ├── syscall.c     tizim chaqiruvlari, int 0x80
 │   │   ├── panic.c       kernel panic, backtrace, Double Fault (v0.6.1)
@@ -135,6 +141,7 @@ DiyorOS/
 │   │   ├── ramfs.c       xotiradagi fayl tizimi
 │   │   ├── procfs.c      /proc virtual fayllari
 │   │   ├── fat32.c       FAT32: diskdagi fayl tizimi
+│   │   ├── pipe.c        kanallar (pipe): 4 KB aylanma bufer (v0.8)
 │   │   └── rootfs.c      yuklanishda papka va fayllarni yaratish
 │   ├── gfx/              2D grafika (v0.7)
 │   │   ├── gfx.c         sirtlar, to'rtburchak, chiziq, matn, BMP
@@ -157,6 +164,7 @@ DiyorOS/
 │       ├── cmd_process.c ps, spawn, kill, sched
 │       ├── cmd_fs.c      ls, cd, cat, cp, mv, rm, tree...
 │       ├── cmd_disk.c    disk, mkfs, mount, umount
+│       ├── cmd_sync.c    sinx: poyga, ishlab chiqaruvchi-iste'molchi, deadlock, faylasuflar (v0.8)
 │       └── editor.c      matn muharriri (edit)
 └── user/                 dasturlar — ring 3 da ishlaydi, /bin ga tushadi
     ├── crt0.s            dastur boshlanishi: main(argc, argv)
@@ -164,7 +172,8 @@ DiyorOS/
     ├── ugfx.c            dasturlar uchun kichik grafika kutubxonasi (v0.7)
     ├── linker.ld         dasturlar 0x40000000 dan joylashadi
     ├── initrd.s          dasturlarni kernel ichiga joylash
-    └── hello.c guess.c primes.c hack.c isolate.c kundalik.c pi.c mandel.c ilon.c
+    ├── hello.c guess.c primes.c hack.c isolate.c kundalik.c pi.c mandel.c ilon.c
+    └── wc.c grep.c head.c sanoq.c ota.c   (v0.8: kanallar va spawn/wait uchun)
 ```
 
 ---
@@ -209,7 +218,7 @@ protsessor boshqa vazifalarga beriladi.
   o'ldiriladi ("Segmentation fault"). Kernelning o'zi xato qilsa — *kernel panic*: tizim to'xtaydi,
   chunki buzilgan kernel bilan davom etish ma'lumotlarni yo'qotishi mumkin.
 
-Har bir bosqichga oid savollar: `docs/v0.2-xotira.md` ... `docs/v0.7-grafika.md`.
+Har bir bosqichga oid savollar: `docs/v0.2-xotira.md` ... `docs/v0.8-sinxronizatsiya.md`.
 
 ---
 
@@ -225,7 +234,7 @@ Har bir bosqichga oid savollar: `docs/v0.2-xotira.md` ... `docs/v0.7-grafika.md`
 | **v0.6** ✅ | ATA disk, FAT32, `/disk` — [batafsil](docs/v0.6-disk-fat32.md) | Kiritish-chiqarish, disklar |
 | **v0.6.1** ✅ | Kod tekshiruvi: 20+ xato tuzatildi; panic, jurnal, serial, FPU, himoyalar — [batafsil](docs/v0.6.1-mustahkamlash.md) | Ishonchlilik, race condition |
 | **v0.7** ✅ | Grafik rejim, PCI, oyna menejeri, sichqoncha, 7 ta grafik dastur, oyna syscall lari — [batafsil](docs/v0.7-grafika.md) | Grafik quyi tizim, I/O |
-| v0.8 | Mutex, semafor, pipe, `exec`/`wait` | Sinxronizatsiya, IPC |
+| **v0.8** ✅ | Mutex, semafor, deadlock aniqlash, kanallar, yo'naltirish, `spawn`/`wait`, signallar, preemptive kernel — [batafsil](docs/v0.8-sinxronizatsiya.md) | Sinxronizatsiya, IPC |
 | v1.0 | Haqiqiy kompyuterda yuklash, testlar, diplom matni | — |
 
 ---

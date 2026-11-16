@@ -39,6 +39,12 @@ int      win_update(int id, const unsigned *pixels);        /* eni*bo'yi ta piks
 int      win_event(int id, struct gui_event *ev);           /* 1 — hodisa bor, 0 — yo'q, manfiy — oyna yo'q */
 int      win_close(int id);
 
+/* Jarayonlar va kanallar (v0.8) */
+int      spawn(const char *path, const char *args, const int io[2]); /* bola PID; io: {stdin, stdout}, -1 — meros, 0 — hammasi meros */
+int      wait(int pid, int *code);                                   /* bola tugashini kutish */
+int      pipe(int fds[2]);                                           /* fds[0] — o'qish, fds[1] — yozish */
+int      isatty(int fd);                                             /* 1 — klaviatura/ekran, 0 — kanal */
+
 /* Maxsus tugmalar (GUI_EV_KEY dagi key) */
 #define KEY_UP     0x11
 #define KEY_DOWN   0x12
@@ -53,6 +59,8 @@ char    *strcpy(char *dst, const char *src);
 void    *memset(void *dst, int c, size_t n);
 void    *memcpy(void *dst, const void *src, size_t n);
 int      atoi(const char *s);
+int      strncmp(const char *a, const char *b, size_t n);
+char    *strstr(const char *hay, const char *needle);
 
 /* Kiritish / chiqarish */
 int      printf(const char *fmt, ...);

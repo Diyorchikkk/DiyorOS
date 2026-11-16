@@ -22,6 +22,7 @@
 #include "drivers.h"
 #include "string.h"
 #include "config.h"
+#include "sync.h"
 
 /* ------------------------------ Yordamchilar ------------------------------ */
 
@@ -210,6 +211,10 @@ void cmd_ps(const char *args)
         char buf[TASK_NOTE_LEN];
         if (t->user && t->state == TASK_ZOMBIE) {
             ksnprintf(buf, sizeof(buf), "chiqish kodi %d", t->exit_code);
+            note = buf;
+        } else if (t->wait_reason && t->state == TASK_BLOCKED) {      /* v0.8: nimani kutyapti */
+            ksnprintf(buf, sizeof(buf), "kutadi: %s%s%s", t->wait_reason,
+                      t->waiting_mutex ? " " : "", t->waiting_mutex ? t->waiting_mutex->name : "");
             note = buf;
         } else if (t->user && !note[0]) {
             note = "user dastur (ring 3)";

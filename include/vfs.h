@@ -43,6 +43,8 @@ enum {
     VFS_EIO         = -15,  /* disk xatosi */
     VFS_ENOSPC      = -16,  /* diskda joy qolmadi */
     VFS_ENODEV      = -17,  /* fayl tizimi ulanmagan */
+    VFS_EPIPE       = -18,  /* pipe ning o'quvchisi qolmagan (v0.8) */
+    VFS_EINTR       = -19,  /* kutish signal bilan to'xtatildi (v0.8) */
 };
 
 typedef enum { VFS_FILE = 1, VFS_DIR = 2 } vfs_type_t;
@@ -110,6 +112,8 @@ typedef struct {
     uint32_t    offset;      /* joriy o'qish/yozish joyi */
     uint32_t    flags;
     uint32_t    owner;       /* qaysi jarayon ochgan (PID) — boshqasi ishlata olmaydi */
+    struct pipe *pipe;       /* v0.8: fayl emas, pipe ning bir uchi (node = 0) */
+    bool        pipe_write;  /* true — yozish uchi, false — o'qish uchi */
 } vfs_fd_t;
 
 /* Ishga tushirish */
@@ -145,6 +149,14 @@ const vfs_fd_t *vfs_fd_info(int fd);
 bool        vfs_fd_owned(int fd, uint32_t pid);
 void        vfs_close_owner(uint32_t pid);   /* jarayon tugaganda uning fayllarini yopish */
 int         vfs_fd_count(uint32_t pid);      /* jarayon ochgan fayllar soni */
+
+/* v0.8 */
+int         vfs_pipe(int fds[2]);            /* fds[0] — o'qish, fds[1] — yozish uchi */
+int         vfs_dup(int fd, uint32_t owner); /* xuddi shu fayl/pipe ga yangi deskriptor */
+void        vfs_fd_set_owner(int fd, uint32_t pid);
+bool        vfs_fd_is_pipe(int fd);
+void        vfs_lock(void);                  /* VFS va fayl tizimlarining umumiy (rekursiv) qulfi */
+void        vfs_unlock(void);
 
 const char *vfs_strerror(int err);
 

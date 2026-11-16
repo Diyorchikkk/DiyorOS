@@ -27,9 +27,10 @@
  *   Uzun nomlar (LFN, masalan "Mening hujjatim.txt") 8.3 yozuvdan OLDIN
  *   joylashgan qo'shimcha yozuvlarda saqlanadi (har birida 13 ta belgi).
  *
- * Har bir amal uzilishlar o'chiq holda bajariladi (irq_save): disk tuzilmasi
- * bir vaqtda ikki vazifa tomonidan o'zgartirilmasligi uchun. v0.8 da mutex bilan
- * almashtiriladi.
+ * Har bir amal VFS qulfi (rekursiv mutex, v0.8) ostida bajariladi: disk
+ * tuzilmasi (FAT, papkalar, kesh) bir vaqtda ikki vazifa tomonidan
+ * o'zgartirilmasligi uchun. v0.6.1 da uzilishlar o'chirilardi — katta faylni
+ * yozish paytida sichqoncha ham qotib qolardi.
  *
  * ISHONCHLILIK (v0.6.1)
  * Diskdagi ma'lumotga ISHONMAYMIZ: disk boshqa tizimda buzilgan bo'lishi mumkin.
@@ -1086,9 +1087,9 @@ static int do_unmount(vfs_node_t *root)
     return VFS_OK;
 }
 
-/* ----- Har bir amal uzilishlarsiz (atomar) bajariladi ----- */
+/* ----- Har bir amal VFS qulfi ostida (boshqa vazifalar ishlayveradi) ----- */
 
-#define LOCKED(expr) do { uint32_t _f = irq_save(); __typeof__(expr) _r = (expr); irq_restore(_f); return _r; } while (0)
+#define LOCKED(expr) do { vfs_lock(); __typeof__(expr) _r = (expr); vfs_unlock(); return _r; } while (0)
 
 static int32_t op_read(vfs_node_t *n, uint32_t o, uint32_t l, uint8_t *b)        { LOCKED(do_read(n, o, l, b)); }
 static int32_t op_write(vfs_node_t *n, uint32_t o, uint32_t l, const uint8_t *b) { LOCKED(do_write(n, o, l, b)); }
@@ -1118,9 +1119,9 @@ static int mount_locked(vfs_node_t **out);
 
 int fat32_mount(vfs_node_t **out)
 {
-    uint32_t f = irq_save();
+    vfs_lock();
     int err = mount_locked(out);
-    irq_restore(f);
+    vfs_unlock();
     return err;
 }
 
@@ -1215,9 +1216,11 @@ static int mount_locked(vfs_node_t **out)
 void fat32_stats(fat32_stats_t *st)
 {
     memset(st, 0, sizeof(*st));
-    if (!fs.mounted)
+    vfs_lock();
+    if (!fs.mounted) {
+        vfs_unlock();
         return;
-    uint32_t f = irq_save();
+    }
     st->mounted        = true;
     st->volume_id      = fs.volume_id;
     st->total_clusters = fs.cluster_count;
@@ -1233,7 +1236,7 @@ void fat32_stats(fat32_stats_t *st)
         fs.free_valid = true;              /* keyin alloc/free o'zi hisoblab boradi */
     }
     st->free_clusters = fs.free_count;
-    irq_restore(f);
+    vfs_unlock();
 }
 
 /* ------------------------------- Formatlash ------------------------------- */
@@ -1263,7 +1266,7 @@ int fat32_mkfs(const char *label)
     if (clusters < 65525)
         return VFS_ENOSPC;                     /* FAT32 uchun disk juda kichik */
 
-    uint32_t f = irq_save();
+    vfs_lock();
     uint8_t sec[SECTOR_SIZE];
     int err = VFS_OK;
 
@@ -1359,7 +1362,7 @@ int fat32_mkfs(const char *label)
     }
 
     kfree(zero);
-    irq_restore(f);
+    vfs_unlock();
     klog("fat32: mkfs %s (%u sektor, klaster %u bayt)", err ? "muvaffaqiyatsiz" : "bajarildi",
          total, spc * SECTOR_SIZE);
     return err;

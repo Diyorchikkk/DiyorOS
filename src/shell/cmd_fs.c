@@ -426,38 +426,6 @@ void cmd_stat(const char *args)
     kprintf("\n  Ochiq fd lar:  %u\n", n->open_count);
 }
 
-void cmd_wc(const char *args)
-{
-    char path[VFS_PATH_MAX];
-    take_word(args, path, sizeof(path));
-    if (!path[0]) {
-        kprintf("Foydalanish: wc <fayl>\n");
-        return;
-    }
-    int fd = vfs_open(path, VFS_O_READ);
-    if (fd < 0) {
-        fs_error("wc", path, fd);
-        return;
-    }
-    uint32_t lines = 0, words = 0, bytes = 0;
-    bool in_word = false;
-    char buf[256];
-    int32_t n;
-    while ((n = vfs_read(fd, buf, sizeof(buf))) > 0)
-        for (int32_t i = 0; i < n; i++) {
-            char c = buf[i];
-            bytes++;
-            if (c == '\n')
-                lines++;
-            bool space = (c == ' ' || c == '\n' || c == '\t');
-            if (!space && !in_word)
-                words++;
-            in_word = !space;
-        }
-    vfs_close(fd);
-    kprintf("%u qator, %u so'z, %u bayt  %s\n", lines, words, bytes, path);
-}
-
 /* ramfs bo'ylab yurib, fayllar va hajmni sanash (mount nuqtalariga kirmaymiz) */
 static void df_walk(vfs_node_t *dir, uint32_t *files, uint32_t *dirs, uint32_t *bytes, uint32_t *alloc)
 {
@@ -479,7 +447,9 @@ void cmd_df(const char *args)
 {
     (void)args;
     uint32_t files = 0, dirs = 0, bytes = 0, alloc = 0;
+    vfs_lock();                              /* daraxt bo'ylab yurish paytida hech kim o'zgartirmasin */
     df_walk(vfs_root(), &files, &dirs, &bytes, &alloc);
+    vfs_unlock();
     heap_stats_t hs;
     heap_get_stats(&hs);
 

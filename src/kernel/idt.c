@@ -171,6 +171,7 @@ registers_t *interrupt_handler(registers_t *r)
 
     if (r->int_no == SYSCALL_VECTOR) {
         syscall_handler(r);
+        task_check_signals(r);                 /* v0.8: to'xtatish so'ralgan bo'lsa — shu yerda */
         return sched_maybe_switch(r);
     }
 
@@ -194,5 +195,6 @@ registers_t *interrupt_handler(registers_t *r)
         outb(PIC1_CMD, PIC_EOI);
     }
 
+    task_check_signals(r);                     /* user kodini to'xtatgan uzilish: signal bormi */
     return sched_maybe_switch(r);
 }

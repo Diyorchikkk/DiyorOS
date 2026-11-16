@@ -36,6 +36,7 @@
  * Bu v0.8 da qilinadigan mutex ning sodda ko'rinishi.
  */
 #include "gui.h"
+#include "sync.h"
 #include "fb.h"
 #include "vga.h"
 #include "drivers.h"
@@ -180,25 +181,31 @@ static int key_hook(char key)
 
 /* -------------------------------- Qulf -------------------------------- */
 
-static volatile bool lock_held = false;
+/*
+ * v0.8: haqiqiy mutex. v0.7 da "band bo'lsa — yield qilib qayta urinish"
+ * (spin + yield) edi: kutayotgan vazifa har kvantda bekorga uyg'onardi.
+ * Endi u uxlaydi va qulf bo'shaganda navbat bilan uyg'otiladi.
+ * Oyna menejeri, user dasturlarning oyna syscall lari shu qulfni oladi.
+ */
+static mutex_t wm_mutex;
+static bool    wm_mutex_ready = false;
 
 static void wm_lock(void)
 {
-    for (;;) {
+    if (!wm_mutex_ready) {                  /* birinchi chaqiruvda yaratiladi (bo'linmas) */
         uint32_t f = irq_save();
-        if (!lock_held) {
-            lock_held = true;
-            irq_restore(f);
-            return;
+        if (!wm_mutex_ready) {
+            mutex_init(&wm_mutex, "wm", false);
+            wm_mutex_ready = true;
         }
         irq_restore(f);
-        task_yield();                      /* band: boshqalar ishlab tursin */
     }
+    mutex_lock(&wm_mutex);
 }
 
 static void wm_unlock(void)
 {
-    lock_held = false;
+    mutex_unlock(&wm_mutex);
 }
 
 /* ------------------------------ Geometriya ------------------------------ */

@@ -613,7 +613,6 @@ static const command_t commands[] = {
     { "mv",        CAT_FILES,   "Ko'chirish / nomini o'zgartirish: mv a.txt b.txt", cmd_mv       },
     { "tree",      CAT_FILES,   "Papkalar daraxti: tree /",                        cmd_tree      },
     { "stat",      CAT_FILES,   "Fayl haqida batafsil (inode, vaqtlar)",           cmd_stat      },
-    { "wc",        CAT_FILES,   "Qator, so'z, bayt soni: wc salom.txt",            cmd_wc        },
     { "df",        CAT_FILES,   "Fayl tizimlari bandligi",                         cmd_df        },
 
     { "disk",      CAT_DISK,    "Disk va FAT32 haqida ma'lumot",                   cmd_disk      },
@@ -633,6 +632,7 @@ static const command_t commands[] = {
     { "spawn",     CAT_TASKS,   "Fon vazifasi: spawn spinner | primes | busy",     cmd_spawn     },
     { "kill",      CAT_TASKS,   "Vazifani to'xtatish: kill 3",                     cmd_kill      },
     { "sched",     CAT_TASKS,   "Scheduler statistikasi",                          cmd_sched     },
+    { "sinx",      CAT_TASKS,   "Sinxronizatsiya: sinx poyga|ishlab|deadlock|faylasuflar", cmd_sinx },
 
     { "gui",       CAT_SYSTEM,  "Grafik rejim: oynalar, sichqoncha, dasturlar",    cmd_gui       },
     { "mouse",     CAT_SYSTEM,  "Sichqoncha tezligi: mouse <1-10>",                cmd_mouse     },
@@ -697,6 +697,7 @@ static void cmd_help(const char *args)
             kprintf(" %s", c->name);
     normal();
     kprintf("\nBatafsil: help <buyruq>.  Dasturni fonda ishlatish: nom &   To'xtatish: Ctrl+C\n");
+    kprintf("Kanal: ls | grep o | wc   Faylga: sanoq 9 > f.txt (>> qo'shish)   Fayldan: wc < f.txt\n");
     kprintf("Tab - to'ldirish, strelkalar - tarix va qator tahriri, g'ildirak - varaqlash.\n");
 }
 
@@ -824,21 +825,38 @@ static void tab_complete(char *buf, int *len)
  * "primes 1000 &" -> fonda ishga tushirish, shell darhol bo'shaydi
  * "/tmp/dastur"   -> to'liq yo'l bilan
  */
-static bool run_program(const char *cmd, char *args)
+/* Buyruq nomidan dastur yo'li: "hello" -> "/bin/hello". Fayl bo'lmasa — false */
+static bool program_path(const char *cmd, char *path, uint32_t size)
 {
-    char path[VFS_PATH_MAX];
     bool has_slash = false;
     for (const char *p = cmd; *p; p++)
         if (*p == '/')
             has_slash = true;
     if (has_slash)
-        strncpy(path, cmd, sizeof(path) - 1);
+        strncpy(path, cmd, size - 1);
     else
-        ksnprintf(path, sizeof(path), "/bin/%s", cmd);
-    path[sizeof(path) - 1] = 0;
+        ksnprintf(path, size, "/bin/%s", cmd);
+    path[size - 1] = 0;
 
     vfs_node_t *n;
-    if (vfs_lookup(path, &n) != VFS_OK || n->type != VFS_FILE)
+    return vfs_lookup(path, &n) == VFS_OK && n->type == VFS_FILE;
+}
+
+static void report_exit(const char *cmd, int32_t code)
+{
+    if (code == EXIT_CTRL_C) {
+        kprintf("^C\n");
+    } else if (code != 0 && code != EXIT_FAULT && code != EXIT_PIPE) {
+        vga_set_color(VGA_DARK_GREY, VGA_BLACK);
+        kprintf("[%s %d kodi bilan tugadi]\n", cmd, code);
+        normal();
+    }
+}
+
+static bool run_program(const char *cmd, char *args)
+{
+    char path[VFS_PATH_MAX];
+    if (!program_path(cmd, path, sizeof(path)))
         return false;
 
     /* Oxirida "&" bo'lsa — fonda */
@@ -854,13 +872,10 @@ static bool run_program(const char *cmd, char *args)
     }
 
     task_reap();
-    /* Yaratish va "oldingi plan" deb belgilash bo'linmas: aks holda dastur
-       belgilanmasdan oldin ishlab ketib, klaviaturadan o'qiy olmay qolishi mumkin edi */
-    uint32_t flags = irq_save();
-    int32_t pid = process_spawn(path, args);
-    if (pid > 0 && !background)
-        task_set_foreground((uint32_t)pid);
-    irq_restore(flags);
+    /* "Oldingi plan" belgisi vazifa yaratilayotganda qo'yiladi (bo'linmas): aks holda
+       dastur belgilanmasdan ishlab ketib, klaviaturadan o'qiy olmay qolishi mumkin edi */
+    spawn_opts_t opts = { .fd_in = -1, .fd_out = -1, .pgid = 0, .foreground = !background };
+    int32_t pid = process_spawn_ex(path, args, &opts);
     if (pid < 0) {
         vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
         kprintf("%s: %s\n", cmd, process_strerror(pid));
@@ -878,15 +893,300 @@ static bool run_program(const char *cmd, char *args)
     task_set_foreground(0);
     task_reap_pid((uint32_t)pid);
     normal();
-
-    if (code == EXIT_CTRL_C) {
-        kprintf("^C\n");
-    } else if (code != 0 && code != EXIT_FAULT) {
-        vga_set_color(VGA_DARK_GREY, VGA_BLACK);
-        kprintf("[%s %d kodi bilan tugadi]\n", cmd, code);
-        normal();
-    }
+    report_exit(cmd, code);
     return true;
+}
+
+/* ------------------------------ Kanallar: a | b | c ------------------------------ */
+/*
+ * "ls /bin | grep o | wc" — har bir bosqichning chiqishi keyingisining kirishiga.
+ *
+ * 1. Qator "|" bo'yicha bo'linadi (ko'pi bilan 4 bosqich), N-1 ta kanal yaratiladi.
+ * 2. Dasturlar (2-, 3-... bosqich va 1-bosqich dastur bo'lsa) BIRDANIGA ishga
+ *    tushiriladi — ular parallel ishlaydi: biri yozayotganda keyingisi o'qiydi.
+ *    Hammasi bitta JARAYON GURUHIda (pgid = birinchi dastur PID) — Ctrl+C butun
+ *    guruhni to'xtatadi, klaviatura guruhga tegishli.
+ * 3. 1-bosqich shell ning ICHKI buyrug'i bo'lsa (ls, cat, ps, echo ...), u shell
+ *    ichida bajariladi, ekranga chiqishi esa ushlab olinadi (vga_set_capture) va
+ *    kanalga yoziladi. Chiqish avval xotiraga yig'iladi: ichki buyruq VFS qulfini
+ *    ushlab turib ekranga yozsa ham kanal to'lib "qotib" qolmaydi (deadlock yo'q).
+ * 4. Shell o'zidagi kanal uchlarini yopadi — aks holda wc hech qachon EOF ni
+ *    ko'rmasdi (yozish uchi shell da ochiq qolardi). Keyin hammasini kutadi.
+ *
+ * Yo'naltirish (redirect) ham shu yerda: "sanoq 100 > /disk/son.txt",
+ * "ls >> log", "wc < fayl". Fayl ochiladi va uning deskriptori dasturning
+ * stdout / stdin i qilib beriladi — dastur buni bilmaydi ham, u fd 1 ga yozadi.
+ */
+#define PIPE_STAGES  4
+#define CAPTURE_MAX  (64 * 1024)
+
+static task_t   *shell_self = 0;
+static char     *capture_buf = 0;
+static uint32_t  capture_len = 0;
+static bool      capture_overflow = false;
+
+static bool capture_char(char c)
+{
+    if (!sched_active() || task_current() != shell_self)
+        return false;                        /* boshqa vazifalar ekranga yozaveradi */
+    if (capture_len < CAPTURE_MAX)
+        capture_buf[capture_len++] = c;
+    else
+        capture_overflow = true;
+    return true;
+}
+
+static const command_t *find_command(const char *name);
+
+static void pipe_error(const char *fmt, const char *arg)
+{
+    vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+    kprintf(fmt, arg);
+    normal();
+}
+
+/* "a b > fayl" -> args "a b", *path = "fayl". Topilmasa — 0 */
+static char *cut_redirect(char *args, char sym, bool *append)
+{
+    char *r = args;
+    while (*r && *r != sym)
+        r++;
+    if (!*r)
+        return 0;
+    *r++ = 0;
+    *append = (sym == '>' && *r == '>');
+    if (*append)
+        r++;
+    char *path = (char *)skip_spaces(r);
+    char *end = path;
+    while (*end && *end != ' ')
+        end++;
+    *end = 0;
+    for (int n = strlen(args); n > 0 && args[n - 1] == ' '; n--)   /* argumentlar oxiridagi bo'sh joylar */
+        args[n - 1] = 0;
+    return path;
+}
+
+static void run_pipeline(char *line)
+{
+    char *stage[PIPE_STAGES], *args[PIPE_STAGES];
+    int count = 0;
+    char *p = line;
+    for (;;) {
+        char *bar = p;
+        while (*bar && *bar != '|')
+            bar++;
+        bool last = !*bar;
+        *bar = 0;
+        if (count == PIPE_STAGES) {
+            pipe_error("Kanalda ko'pi bilan %s ta buyruq bo'lishi mumkin\n", "4");
+            return;
+        }
+        char *s = (char *)skip_spaces(p);
+        size_t n = strlen(s);
+        while (n > 0 && s[n - 1] == ' ')
+            s[--n] = 0;
+        if (!*s) {
+            pipe_error("Kanalda bo'sh buyruq bor: '%s'\n", "a | | b");
+            return;
+        }
+        if (s[n - 1] == '&') {
+            pipe_error("%s: kanal (|) fonda (&) ishga tushirilmaydi\n", s);
+            return;
+        }
+        char *a = s;
+        while (*a && *a != ' ')
+            a++;
+        if (*a) {
+            *a = 0;
+            a = (char *)skip_spaces(a + 1);
+        }
+        stage[count] = s;
+        args[count] = a;
+        count++;
+        if (last)
+            break;
+        p = bar + 1;
+    }
+
+    /* Bosqichlarni tekshirish: 1-si ichki buyruq yoki dastur, qolganlari — faqat dastur */
+    char paths[PIPE_STAGES][VFS_PATH_MAX];
+    const command_t *builtin = 0;
+    for (int i = 0; i < count; i++) {
+        if (program_path(stage[i], paths[i], sizeof(paths[i])))
+            continue;
+        if (i == 0 && (builtin = find_command(stage[0])) != 0)
+            continue;
+        if (find_command(stage[i]))
+            pipe_error("%s: ichki buyruq kanal o'rtasida/oxirida bo'lolmaydi (stdin o'qimaydi)\n", stage[i]);
+        else
+            pipe_error("%s: bunday dastur yo'q (/bin ga qarang: ls /bin)\n", stage[i]);
+        return;
+    }
+    /* Yo'naltirishlar: "<" faqat birinchi, ">" faqat oxirgi bosqichda */
+    bool append = false, dummy;
+    char *in_path = 0, *out_path = 0;
+    for (int i = 0; i < count; i++) {
+        char *ip = cut_redirect(args[i], '<', &dummy);
+        char *op = cut_redirect(args[i], '>', &append);
+        if ((ip && i != 0) || (op && i != count - 1)) {
+            pipe_error("%s: '<' faqat birinchi, '>' faqat oxirgi buyruqda bo'ladi\n", stage[i]);
+            return;
+        }
+        if ((ip && !*ip) || (op && !*op)) {
+            pipe_error("%s: '<' / '>' dan keyin fayl nomi kerak\n", stage[i]);
+            return;
+        }
+        if (ip) in_path = ip;
+        if (op) out_path = op;
+    }
+    if (builtin && (strcmp(stage[0], "edit") == 0 || strcmp(stage[0], "gui") == 0 ||
+                    strcmp(stage[0], "clear") == 0)) {
+        pipe_error("%s: ekran bilan ishlaydigan buyruqni kanal/faylga yo'naltirib bo'lmaydi\n", stage[0]);
+        return;
+    }
+    if (in_path && builtin) {
+        pipe_error("%s: ichki buyruq '<' ni qo'llamaydi (klaviaturadan o'qimaydi)\n", stage[0]);
+        return;
+    }
+    if (builtin && count == 1 && !out_path)
+        return;
+
+    int in_fd = -1, out_fd = -1;
+    if (in_path && (in_fd = vfs_open(in_path, VFS_O_READ)) < 0) {
+        vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+        kprintf("%s: %s\n", in_path, vfs_strerror(in_fd));
+        normal();
+        return;
+    }
+    if (out_path) {
+        uint32_t fl = VFS_O_WRITE | VFS_O_CREATE | (append ? VFS_O_APPEND : VFS_O_TRUNC);
+        if ((out_fd = vfs_open(out_path, fl)) < 0) {
+            vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+            kprintf("%s: %s\n", out_path, vfs_strerror(out_fd));
+            normal();
+            if (in_fd >= 0)
+                vfs_close(in_fd);
+            return;
+        }
+    }
+
+    int pr[PIPE_STAGES - 1], pw[PIPE_STAGES - 1];
+    int pipes = 0;
+    for (; pipes < count - 1; pipes++) {
+        int fds[2];
+        int err = vfs_pipe(fds);
+        if (err) {
+            pipe_error("pipe: %s\n", vfs_strerror(err));
+            for (int j = 0; j < pipes; j++) {
+                vfs_close(pr[j]);
+                vfs_close(pw[j]);
+            }
+            if (in_fd >= 0)
+                vfs_close(in_fd);
+            if (out_fd >= 0)
+                vfs_close(out_fd);
+            return;
+        }
+        pr[pipes] = fds[0];
+        pw[pipes] = fds[1];
+    }
+
+    task_reap();
+    uint32_t me = task_current()->pid;
+    int32_t pids[PIPE_STAGES] = { 0 };
+    uint32_t pgid = 0;
+    bool failed = false;
+    for (int i = builtin ? 1 : 0; i < count && !failed; i++) {
+        spawn_opts_t o = { .fd_in = -1, .fd_out = -1, .pgid = pgid, .foreground = true };
+        if (i > 0)
+            o.fd_in = vfs_dup(pr[i - 1], me);      /* nusxa: muvaffaqiyatda bolaga o'tadi */
+        else if (in_fd >= 0)
+            o.fd_in = vfs_dup(in_fd, me);
+        if (i < count - 1)
+            o.fd_out = vfs_dup(pw[i], me);
+        else if (out_fd >= 0)
+            o.fd_out = vfs_dup(out_fd, me);
+        int32_t pid = (o.fd_in < -1 || o.fd_out < -1) ? VFS_EMFILE
+                                                      : process_spawn_ex(paths[i], args[i], &o);
+        if (pid < 0) {
+            if (o.fd_in >= 0)
+                vfs_close(o.fd_in);
+            if (o.fd_out >= 0)
+                vfs_close(o.fd_out);
+            vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
+            kprintf("%s: %s\n", stage[i], process_strerror(pid));
+            normal();
+            failed = true;
+            break;
+        }
+        pids[i] = pid;
+        if (!pgid)
+            pgid = (uint32_t)pid;
+    }
+    if (failed && pgid)
+        task_signal_group(pgid, EXIT_KILLED);      /* yarim qurilgan kanalni to'xtatamiz */
+
+    /* Shell dagi uchlarni yopamiz (ichki buyruq yozadigan birinchi kanaldan tashqari) */
+    for (int j = 0; j < pipes; j++) {
+        vfs_close(pr[j]);
+        if (!(builtin && j == 0))
+            vfs_close(pw[j]);
+    }
+
+    /* Ichki buyruq chiqishi: kanalga yoki (yolg'iz bo'lsa) faylga */
+    int builtin_out = !builtin ? -1 : (count > 1 ? pw[0] : out_fd);
+    if (builtin) {
+        if (!failed) {
+            capture_buf = kmalloc(CAPTURE_MAX);
+            capture_len = 0;
+            capture_overflow = false;
+            if (capture_buf) {
+                vga_set_capture(capture_char);
+                builtin->fn(args[0]);
+                vga_set_capture(0);
+                normal();
+                for (uint32_t off = 0; off < capture_len; ) {
+                    int32_t n = vfs_write(builtin_out, capture_buf + off, capture_len - off);
+                    if (n <= 0)
+                        break;                     /* EPIPE: o'quvchi tugagan */
+                    off += (uint32_t)n;
+                }
+                kfree(capture_buf);
+                capture_buf = 0;
+                if (capture_overflow)
+                    pipe_error("%s: chiqish 64 KB dan katta - qolgani tashlab yuborildi\n", stage[0]);
+            } else {
+                pipe_error("%s: xotira yetmadi\n", stage[0]);
+            }
+        }
+        if (count > 1)
+            vfs_close(pw[0]);                      /* -> keyingi bosqich EOF ko'radi */
+    }
+    if (in_fd >= 0)
+        vfs_close(in_fd);
+    if (out_fd >= 0)
+        vfs_close(out_fd);
+
+    int32_t last_code = 0;
+    bool interrupted = false;
+    for (int i = 0; i < count; i++) {
+        if (!pids[i])
+            continue;
+        int32_t code = task_wait((uint32_t)pids[i]);
+        if (code == EXIT_CTRL_C)
+            interrupted = true;
+        last_code = code;
+    }
+    task_set_foreground(0);
+    for (int i = 0; i < count; i++)
+        if (pids[i])
+            task_reap_pid((uint32_t)pids[i]);
+    normal();
+    if (interrupted)
+        kprintf("^C\n");
+    else if (!failed && pids[count - 1])
+        report_exit(stage[count - 1], last_code);
 }
 
 /* Fonda ishlagan dasturlar tugagan bo'lsa — xabar berib, xotirasini bo'shatish */
@@ -896,6 +1196,9 @@ static void report_finished(void)
         task_t *t = task_get(i);
         if (t->state != TASK_ZOMBIE || !t->user || t->pid == task_foreground())
             continue;
+        task_t *parent = task_find(t->parent_pid);
+        if (parent && parent->user && parent->state != TASK_ZOMBIE)
+            continue;                        /* v0.8: bu bolani otasi o'zi wait() bilan yig'adi */
         if (t->exit_code != EXIT_TTIN) {     /* bu holatda xabar allaqachon chiqarilgan */
             vga_set_color(VGA_DARK_GREY, VGA_BLACK);
             kprintf("[PID %u] %s tugadi (kod %d)\n", t->pid, t->name, t->exit_code);
@@ -905,12 +1208,27 @@ static void report_finished(void)
     }
 }
 
+static const command_t *find_command(const char *name)
+{
+    for (unsigned i = 0; i < COMMAND_COUNT; i++)
+        if (strcmp(name, commands[i].name) == 0)
+            return &commands[i];
+    return 0;
+}
+
 /* Qatorni buyruq nomi va argumentlarga ajratib, mos funksiyani chaqirish */
 static void execute(char *line)
 {
     char *cmd = (char *)skip_spaces(line);
     if (!*cmd)
         return;
+    /* v0.8: kanal (|) va yo'naltirish (<, >). "echo matn > fayl" — o'zining eski usuli */
+    bool is_echo = strncmp(cmd, "echo", 4) == 0 && (cmd[4] == ' ' || !cmd[4]);
+    for (char *c = cmd; *c; c++)
+        if (*c == '|' || (!is_echo && (*c == '>' || *c == '<'))) {
+            run_pipeline(cmd);
+            return;
+        }
 
     /* "pi&" -> "pi &": & oldidan bo'sh joy shart bo'lmasin (v0.7) */
     size_t n = strlen(cmd);
@@ -950,6 +1268,8 @@ void shell_run(void)
 {
     char line[LINE_MAX];
     char copy[LINE_MAX];
+
+    shell_self = task_current();
 
     char motd[256];
     int fd = vfs_open("/etc/motd", VFS_O_READ);       /* xush kelibsiz xabari fayldan */

@@ -205,6 +205,7 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
     sched_init();                /* shu oqim "shell" vazifasiga aylanadi, idle yaratiladi */
     boot_msg(true, "Scheduler ishga tushdi (Round-Robin, kvant %u ms)",
              SCHED_QUANTUM * 1000 / TIMER_HZ);
+    boot_msg(true, "Sinxronizatsiya: mutex, semafor, kanallar (pipe); kernel preemptive");
 
     print_banner();
     shell_run();                 /* bu funksiyadan hech qachon qaytilmaydi */

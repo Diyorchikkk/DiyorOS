@@ -20,6 +20,9 @@ void cmd_spawn(const char *args);
 void cmd_kill(const char *args);
 void cmd_sched(const char *args);
 
+/* cmd_sync.c (v0.8) */
+void cmd_sinx(const char *args);
+
 /* cmd_fs.c (v0.4) */
 void cmd_ls(const char *args);
 void cmd_cd(const char *args);
@@ -32,7 +35,6 @@ void cmd_cp(const char *args);
 void cmd_mv(const char *args);
 void cmd_tree(const char *args);
 void cmd_stat(const char *args);
-void cmd_wc(const char *args);
 void cmd_df(const char *args);
 bool shell_redirect(const char *args);   /* echo ... > fayl */
 const char *shell_next_arg(const char *s, char *out, int max);   /* "bo'sh joyli nom" yoki nom\\ bilan */

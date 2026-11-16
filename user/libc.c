@@ -40,6 +40,22 @@ int win_update(int id, const unsigned *pixels)         { return syscall3(SYS_WIN
 int win_event(int id, struct gui_event *ev)            { return syscall3(SYS_WIN_EVENT, id, (int)ev, 0); }
 int win_close(int id)                                  { return syscall3(SYS_WIN_CLOSE, id, 0, 0); }
 
+/* Jarayonlar va kanallar (v0.8) */
+int spawn(const char *path, const char *args, const int io[2]) { return syscall3(SYS_SPAWN, (int)path, (int)args, (int)io); }
+int wait(int pid, int *code)                           { return syscall3(SYS_WAIT, pid, (int)code, 0); }
+int pipe(int fds[2])                                   { return syscall3(SYS_PIPE, (int)fds, 0, 0); }
+
+int isatty(int fd)
+{
+    struct sysinfo si;
+    sysinfo(&si);
+    if (fd == 0)
+        return !(si.stdio & SI_STDIN_PIPE);
+    if (fd == 1)
+        return !(si.stdio & SI_STDOUT_PIPE);
+    return fd == 2;
+}
+
 /* ---------------------------- Satrlar, xotira ---------------------------- */
 
 size_t strlen(const char *s)
@@ -96,6 +112,26 @@ int atoi(const char *s)
     while (*s >= '0' && *s <= '9')
         v = v * 10 + (*s++ - '0');
     return neg ? -v : v;
+}
+
+int strncmp(const char *a, const char *b, size_t n)
+{
+    for (; n; n--, a++, b++) {
+        if (*a != *b)
+            return (unsigned char)*a - (unsigned char)*b;
+        if (!*a)
+            return 0;
+    }
+    return 0;
+}
+
+char *strstr(const char *hay, const char *needle)
+{
+    size_t n = strlen(needle);
+    for (; *hay; hay++)
+        if (strncmp(hay, needle, n) == 0)
+            return (char *)hay;
+    return n ? 0 : (char *)hay;
 }
 
 /* -------------------------------- printf --------------------------------- */

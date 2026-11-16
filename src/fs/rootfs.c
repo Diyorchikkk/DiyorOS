@@ -57,7 +57,9 @@ void rootfs_init(void)
                "Uni tahrirlash uchun: edit salom.txt\n"
                "Dasturlar: ls /bin, keyin nomini yozing (masalan: hello)\n"
                "Kernel jurnali: dmesg\n"
-               "Grafik rejim: gui\n");
+               "Grafik rejim: gui\n"
+               "Kanallar: ls /bin | grep o | wc,  sanoq 100 > /disk/son.txt\n"
+               "Sinxronizatsiya namoyishlari: sinx\n");
 
     write_file("/home/diyorbek/rejalar.txt",
                "DiyorOS rejasi\n"
@@ -70,7 +72,7 @@ void rootfs_init(void)
                "v0.6  disk drayveri, FAT32                         [tayyor]\n"
                "v0.6.1 mustahkamlash: panic, jurnal, FPU, himoyalar [tayyor]\n"
                "v0.7  grafika: oynalar, sichqoncha, dasturlar      [tayyor]\n"
-               "v0.8  sinxronizatsiya: mutex, semafor, pipe\n"
+               "v0.8  sinxronizatsiya: mutex, semafor, pipe        [tayyor]\n"
                "v1.0  diplom ishi\n");
 
     vfs_chdir("/home/diyorbek");

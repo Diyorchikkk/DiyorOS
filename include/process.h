@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "cpu.h"
+#include "task.h"
 
 /* Xato kodlari (VFS kodlaridan keyin) */
 #define PROC_ENOEXEC  (-20)   /* ELF dastur emas yoki format noto'g'ri */
@@ -13,6 +14,7 @@
 /* Dasturni ishga tushirish. args — "a b c" ko'rinishidagi argumentlar.
    PID qaytaradi (> 0) yoki xato kodi (< 0) */
 int32_t     process_spawn(const char *path, const char *args);
+int32_t     process_spawn_ex(const char *path, const char *args, const spawn_opts_t *opts);  /* v0.8 */
 const char *process_strerror(int32_t err);
 
 /* Dastur xatoga yo'l qo'yganda (ring 3 dagi exception): faqat jarayon o'ladi */

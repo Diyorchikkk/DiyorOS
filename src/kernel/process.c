@@ -180,24 +180,30 @@ static int32_t setup_stack(uint32_t *dir, const char *name, const char *args, ui
     return 0;
 }
 
-int32_t process_spawn(const char *path, const char *args)
+/* 1. Faylni xotiraga o'qish. VFS qulfi ostida: o'qish paytida fayl o'chirilib
+   yoki o'zgartirilib qolmasin (v0.8 da syscall lar parallel ishlaydi) */
+static int32_t read_program(const char *path, uint8_t **out, uint32_t *out_size)
 {
     vfs_node_t *node;
+    vfs_lock();
     int err = vfs_lookup(path, &node);
-    if (err)
+    if (!err && node->type == VFS_DIR)
+        err = VFS_EISDIR;
+    if (!err && (node->size == 0 || node->size > EXEC_MAX))
+        err = PROC_ENOEXEC;
+    if (err) {
+        vfs_unlock();
         return err;
-    if (node->type == VFS_DIR)
-        return VFS_EISDIR;
-    if (node->size == 0 || node->size > EXEC_MAX)
-        return PROC_ENOEXEC;
-
-    /* 1. Faylni xotiraga o'qish */
+    }
     uint32_t size = node->size;
     uint8_t *file = kmalloc(size);
-    if (!file)
+    if (!file) {
+        vfs_unlock();
         return PROC_ENOMEM;
+    }
     int fd = vfs_open(path, VFS_O_READ);
     if (fd < 0) {
+        vfs_unlock();
         kfree(file);
         return fd;
     }
@@ -206,10 +212,33 @@ int32_t process_spawn(const char *path, const char *args)
     while (got < size && (n = vfs_read(fd, file + got, size - got)) > 0)
         got += n;
     vfs_close(fd);
+    vfs_unlock();
     if (n < 0) {                               /* o'qishda xato (masalan, disk) */
         kfree(file);
         return n;
     }
+    *out = file;
+    *out_size = got;
+    return 0;
+}
+
+int32_t process_spawn(const char *path, const char *args)
+{
+    return process_spawn_ex(path, args, 0);
+}
+
+/*
+ * v0.8: opts — standart kirish/chiqish (pipe uchun) va jarayon guruhi.
+ * opts->fd_in / fd_out deskriptorlari bolaga TOPSHIRILADI (egasi o'zgaradi):
+ * muvaffaqiyatda ular bolaga tegishli bo'lib qoladi, xatoda — chaqiruvchida.
+ */
+int32_t process_spawn_ex(const char *path, const char *args, const spawn_opts_t *opts)
+{
+    uint8_t *file;
+    uint32_t got;
+    int32_t err = read_program(path, &file, &got);
+    if (err)
+        return err;
 
     /* 2-5. Alohida xotira, segmentlar, stek */
     uint32_t *dir = paging_create_directory();
@@ -234,7 +263,7 @@ int32_t process_spawn(const char *path, const char *args)
     }
 
     /* 6. Ring 3 vazifa */
-    uint32_t pid = task_create_user(name, dir, entry, esp, page_up(image_end), pages);
+    uint32_t pid = task_create_user(name, dir, entry, esp, page_up(image_end), pages, opts);
     if (!pid) {
         paging_free_directory(dir);
         return PROC_ETASKS;

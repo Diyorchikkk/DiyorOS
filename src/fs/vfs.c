@@ -20,8 +20,19 @@
  * ro'yxat buziladi (race condition). Shuning uchun har bir ochiq (public)
  * funksiya KRITIK SEKSIYA: uzilishlar o'chiq holda, bo'linmas bajariladi.
  * Fayl oxiridagi vfs_* funksiyalar — shu "qulf"ni qo'yadigan qobiqlar,
- * haqiqiy ish *_locked funksiyalarida. v0.8 da uzilishlarni o'chirish
- * o'rniga mutex ishlatiladi (disk bilan ishlash paytida tizim to'xtab qolmaydi).
+ * haqiqiy ish *_locked funksiyalarida.
+ *
+ * v0.8: uzilishlarni o'chirish o'rniga REKURSIV MUTEX (vfs_mutex). Farqi:
+ * disk bilan ishlash millisekundlab davom etadi; avval shu paytda taymer,
+ * klaviatura, sichqoncha to'xtab turardi. Endi VFS ni kutayotgan vazifa
+ * uxlaydi, qolganlari (oyna menejeri, boshqa dasturlar) ishlayveradi.
+ * Rekursiv — chunki VFS funksiyalari bir-birini chaqiradi (open -> lookup),
+ * fat32 drayveri ham shu qulfdan foydalanadi.
+ *
+ * Kanallar (pipe) shu jadvalda: fd fayl o'rniga pipe ning bir uchiga
+ * ishora qiladi. Pipe dan o'qish/yozish uxlashi mumkin, shuning uchun u
+ * vfs_mutex ni USHLAMAGAN holda bajariladi (aks holda "ls | wc" da wc
+ * ma'lumot kutib, qulfni ushlab tursa, ls hech narsa yoza olmasdi).
  */
 #include "vfs.h"
 #include "string.h"
@@ -29,12 +40,36 @@
 #include "task.h"
 #include "irq.h"
 #include "klog.h"
+#include "sync.h"
+#include "pipe.h"
 
 #define MAX_MOUNTS 8
 
 static vfs_node_t *root = 0;
 static vfs_node_t *cwd = 0;
 static vfs_fd_t    fds[VFS_MAX_FDS];
+static mutex_t     vfs_mutex;
+static bool        vfs_mutex_ready = false;
+
+void vfs_lock(void)
+{
+    if (!vfs_mutex_ready) {                  /* birinchi chaqiruvda yaratiladi (bo'linmas) */
+        uint32_t f = irq_save();
+        if (!vfs_mutex_ready) {
+            mutex_init(&vfs_mutex, "vfs", true);
+            vfs_mutex_ready = true;
+        }
+        irq_restore(f);
+    }
+    mutex_lock(&vfs_mutex);
+}
+
+void vfs_unlock(void)
+{
+    mutex_unlock(&vfs_mutex);
+}
+
+#define FD_USED(f) ((f).node || (f).pipe)
 
 static struct {
     char        path[VFS_PATH_MAX];
@@ -463,9 +498,23 @@ static int rename_locked(const char *from, const char *to)
 
 static vfs_fd_t *get_fd(int fd)
 {
-    if (fd < 0 || fd >= VFS_MAX_FDS || !fds[fd].node)
+    if (fd < 0 || fd >= VFS_MAX_FDS || !FD_USED(fds[fd]))
         return 0;
     return &fds[fd];
+}
+
+/* 0, 1, 2 an'anaviy ravishda stdin, stdout, stderr uchun — 3 dan boshlaymiz */
+static int alloc_fd(void)
+{
+    for (int i = 3; i < VFS_MAX_FDS; i++)
+        if (!FD_USED(fds[i]))
+            return i;
+    return -1;
+}
+
+static uint32_t current_pid(void)
+{
+    return sched_active() ? task_current()->pid : 1;
 }
 
 static int open_locked(const char *path, uint32_t flags)
@@ -484,13 +533,7 @@ static int open_locked(const char *path, uint32_t flags)
     if ((flags & VFS_O_WRITE) && !n->ops->write)
         return VFS_EROFS;
 
-    /* 0, 1, 2 an'anaviy ravishda stdin, stdout, stderr uchun — 3 dan boshlaymiz */
-    int fd = -1;
-    for (int i = 3; i < VFS_MAX_FDS; i++)
-        if (!fds[i].node) {
-            fd = i;
-            break;
-        }
+    int fd = alloc_fd();
     if (fd < 0)
         return VFS_EMFILE;
 
@@ -503,7 +546,8 @@ static int open_locked(const char *path, uint32_t flags)
     fds[fd].node   = n;
     fds[fd].flags  = flags;
     fds[fd].offset = (flags & VFS_O_APPEND) ? n->size : 0;
-    fds[fd].owner  = sched_active() ? task_current()->pid : 1;
+    fds[fd].owner  = current_pid();
+    fds[fd].pipe   = 0;
     n->open_count++;
     return fd;
 }
@@ -511,7 +555,7 @@ static int open_locked(const char *path, uint32_t flags)
 static int32_t read_locked(int fd, void *buf, uint32_t len)
 {
     vfs_fd_t *f = get_fd(fd);
-    if (!f || !(f->flags & VFS_O_READ))
+    if (!f || !(f->flags & VFS_O_READ) || f->pipe)
         return VFS_EBADF;
     if (!f->node->ops->read)
         return VFS_EINVAL;
@@ -524,7 +568,7 @@ static int32_t read_locked(int fd, void *buf, uint32_t len)
 static int32_t write_locked(int fd, const void *buf, uint32_t len)
 {
     vfs_fd_t *f = get_fd(fd);
-    if (!f || !(f->flags & VFS_O_WRITE))
+    if (!f || !(f->flags & VFS_O_WRITE) || f->pipe)
         return VFS_EBADF;
     if (f->flags & VFS_O_APPEND)
         f->offset = f->node->size;
@@ -539,6 +583,8 @@ static int seek_locked(int fd, uint32_t offset)
     vfs_fd_t *f = get_fd(fd);
     if (!f)
         return VFS_EBADF;
+    if (f->pipe)
+        return VFS_EINVAL;                   /* kanalda "joy" yo'q — faqat ketma-ket */
     f->offset = offset;
     return VFS_OK;
 }
@@ -548,9 +594,54 @@ static int close_locked(int fd)
     vfs_fd_t *f = get_fd(fd);
     if (!f)
         return VFS_EBADF;
+    if (f->pipe) {
+        pipe_t *p = f->pipe;
+        bool w = f->pipe_write;
+        f->pipe = 0;
+        pipe_close(p, w);
+        return VFS_OK;
+    }
     f->node->open_count--;
     f->node = 0;
     return VFS_OK;
+}
+
+static int pipe_locked(int out[2])
+{
+    int r = alloc_fd();
+    if (r < 0)
+        return VFS_EMFILE;
+    fds[r].pipe = (pipe_t *)1;               /* vaqtincha band — ikkinchi uch boshqa joy olsin */
+    int w = alloc_fd();
+    fds[r].pipe = 0;
+    if (w < 0)
+        return VFS_EMFILE;
+    pipe_t *p = pipe_create();
+    if (!p)
+        return VFS_ENOMEM;
+    uint32_t pid = current_pid();
+    fds[r] = (vfs_fd_t){ .node = 0, .offset = 0, .flags = VFS_O_READ,  .owner = pid, .pipe = p, .pipe_write = false };
+    fds[w] = (vfs_fd_t){ .node = 0, .offset = 0, .flags = VFS_O_WRITE, .owner = pid, .pipe = p, .pipe_write = true };
+    out[0] = r;
+    out[1] = w;
+    return VFS_OK;
+}
+
+static int dup_locked(int fd, uint32_t owner)
+{
+    vfs_fd_t *f = get_fd(fd);
+    if (!f)
+        return VFS_EBADF;
+    int nfd = alloc_fd();
+    if (nfd < 0)
+        return VFS_EMFILE;
+    fds[nfd] = *f;
+    fds[nfd].owner = owner;
+    if (f->pipe)
+        pipe_ref(f->pipe, f->pipe_write);
+    else
+        f->node->open_count++;
+    return nfd;
 }
 
 const vfs_fd_t *vfs_fd_info(int fd)
@@ -567,17 +658,16 @@ bool vfs_fd_owned(int fd, uint32_t pid)
 static void close_owner_locked(uint32_t pid)
 {
     for (int i = 0; i < VFS_MAX_FDS; i++)
-        if (fds[i].node && fds[i].owner == pid)
-            vfs_close(i);
+        if (FD_USED(fds[i]) && fds[i].owner == pid)
+            close_locked(i);
 }
 
 /* ----------------------- Ochiq funksiyalar: kritik seksiya ----------------------- */
 /*
- * Har bir vfs_* funksiya uzilishlarni o'chirib, ishni *_locked ga topshiradi va
- * avvalgi holatni qaytaradi. Ichma-ich chaqiruvlar xavfsiz: irq_restore faqat
- * eng tashqi chaqiruvda uzilishlarni qayta yoqadi.
+ * Har bir vfs_* funksiya vfs_mutex ni olib, ishni *_locked ga topshiradi.
+ * Mutex rekursiv: ichma-ich chaqiruvlar (open -> lookup -> fat32) xavfsiz.
  */
-#define VFS_CALL(type, call) do { uint32_t f_ = irq_save(); type r_ = (call); irq_restore(f_); return r_; } while (0)
+#define VFS_CALL(type, call) do { vfs_lock(); type r_ = (call); vfs_unlock(); return r_; } while (0)
 
 int vfs_lookup(const char *path, vfs_node_t **out)
 {
@@ -639,14 +729,60 @@ int vfs_open(const char *path, uint32_t flags)
     VFS_CALL(int, open_locked(path, flags));
 }
 
+/*
+ * Kanal deskriptori bo'lsa — pipe ni qulfsiz qaytaradi. Uni faqat egasi
+ * ishlatadi va faqat egasi yopadi, shuning uchun qulf bo'shagach ham u yashaydi.
+ */
+static pipe_t *fd_pipe(int fd, uint32_t need_flag)
+{
+    vfs_lock();
+    vfs_fd_t *f = get_fd(fd);
+    pipe_t *p = (f && f->pipe && (f->flags & need_flag)) ? f->pipe : 0;
+    vfs_unlock();
+    return p;
+}
+
 int32_t vfs_read(int fd, void *buf, uint32_t len)
 {
+    pipe_t *p = fd_pipe(fd, VFS_O_READ);
+    if (p)
+        return pipe_read(p, buf, len);       /* uxlashi mumkin — VFS qulfi ushlanmagan */
     VFS_CALL(int32_t, read_locked(fd, buf, len));
 }
 
 int32_t vfs_write(int fd, const void *buf, uint32_t len)
 {
+    pipe_t *p = fd_pipe(fd, VFS_O_WRITE);
+    if (p)
+        return pipe_write(p, buf, len);
     VFS_CALL(int32_t, write_locked(fd, buf, len));
+}
+
+int vfs_pipe(int out[2])
+{
+    VFS_CALL(int, pipe_locked(out));
+}
+
+int vfs_dup(int fd, uint32_t owner)
+{
+    VFS_CALL(int, dup_locked(fd, owner));
+}
+
+bool vfs_fd_is_pipe(int fd)
+{
+    vfs_lock();
+    vfs_fd_t *f = get_fd(fd);
+    bool r = f && f->pipe;
+    vfs_unlock();
+    return r;
+}
+
+/* Deskriptorni boshqa jarayonga berish (spawn: bolaning stdin/stdout i).
+   Bitta so'z yoziladi — qulfsiz, uzilishlar o'chiq holda ham chaqirsa bo'ladi */
+void vfs_fd_set_owner(int fd, uint32_t pid)
+{
+    if (fd >= 0 && fd < VFS_MAX_FDS && FD_USED(fds[fd]))
+        fds[fd].owner = pid;
 }
 
 int vfs_seek(int fd, uint32_t offset)
@@ -661,20 +797,20 @@ int vfs_close(int fd)
 
 void vfs_close_owner(uint32_t pid)
 {
-    uint32_t f_ = irq_save();
+    vfs_lock();
     close_owner_locked(pid);
-    irq_restore(f_);
+    vfs_unlock();
 }
 
 /* pid jarayoni nechta fayl ochgan (har bir dasturga chegara qo'yish uchun) */
 int vfs_fd_count(uint32_t pid)
 {
-    uint32_t f_ = irq_save();
+    vfs_lock();
     int count = 0;
     for (int i = 0; i < VFS_MAX_FDS; i++)
-        if (fds[i].node && fds[i].owner == pid)
+        if (FD_USED(fds[i]) && fds[i].owner == pid)
             count++;
-    irq_restore(f_);
+    vfs_unlock();
     return count;
 }
 
@@ -698,6 +834,8 @@ const char *vfs_strerror(int err)
     case VFS_EIO:       return "disk bilan ishlashda xato";
     case VFS_ENOSPC:    return "diskda joy qolmadi";
     case VFS_ENODEV:    return "disk ulanmagan (formatlash: mkfs, ulash: mount disk)";
+    case VFS_EPIPE:     return "kanalning o'qiydigan tomoni yopilgan (broken pipe)";
+    case VFS_EINTR:     return "to'xtatildi (signal)";
     default:            return "noma'lum xato";
     }
 }

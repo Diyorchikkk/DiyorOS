@@ -18,6 +18,25 @@
 #include "ata.h"
 #include "io.h"
 #include "irq.h"
+#include "sync.h"
+
+/* v0.8: diskka bir vaqtda faqat bitta vazifa murojaat qiladi. Avval uzilishlar
+   o'chirilardi (butun tizim kutardi); endi kutayotgan vazifa uxlaydi */
+static mutex_t ata_mutex;
+static bool ata_mutex_ready = false;
+
+static void ata_lock(void)
+{
+    if (!ata_mutex_ready) {                  /* birinchi chaqiruvda yaratiladi (bo'linmas) */
+        uint32_t f = irq_save();
+        if (!ata_mutex_ready) {
+            mutex_init(&ata_mutex, "ata", false);
+            ata_mutex_ready = true;
+        }
+        irq_restore(f);
+    }
+    mutex_lock(&ata_mutex);
+}
 #include "string.h"
 
 #define ATA_DATA      0x1F0
@@ -155,7 +174,7 @@ bool ata_read(uint32_t lba, uint32_t count, void *buf)
     if (!info.present || lba + count > info.sectors || lba + count < lba)
         return false;
 
-    uint32_t f = irq_save();              /* bir vaqtda faqat bitta vazifa diskka murojaat qiladi */
+    ata_lock();
     uint8_t *p = buf;
     bool ok = true;
     while (count && ok) {
@@ -174,7 +193,7 @@ bool ata_read(uint32_t lba, uint32_t count, void *buf)
     }
     if (!ok)
         info.errors++;
-    irq_restore(f);
+    mutex_unlock(&ata_mutex);
     return ok;
 }
 
@@ -183,7 +202,7 @@ bool ata_write(uint32_t lba, uint32_t count, const void *buf)
     if (!info.present || lba + count > info.sectors || lba + count < lba)
         return false;
 
-    uint32_t f = irq_save();
+    ata_lock();
     const uint8_t *p = buf;
     bool ok = true;
     while (count && ok) {
@@ -209,6 +228,6 @@ bool ata_write(uint32_t lba, uint32_t count, const void *buf)
     }
     if (!ok)
         info.errors++;
-    irq_restore(f);
+    mutex_unlock(&ata_mutex);
     return ok;
 }

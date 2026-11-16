@@ -28,7 +28,11 @@
 #define SYS_WIN_UPDATE 14 /* win_update(raqam, piksellar)    — eni*bo'yi ta 0x00RRGGBB ni ekranga */
 #define SYS_WIN_EVENT  15 /* win_event(raqam, struct gui_event *) — 1: hodisa bor, 0: yo'q */
 #define SYS_WIN_CLOSE  16 /* win_close(raqam) */
-#define SYS_COUNT    17
+/* v0.8: jarayonlar va kanallar */
+#define SYS_SPAWN    17   /* spawn(yo'l, argumentlar, int io[2]) — bola PID; io: {stdin, stdout}, -1 — meros */
+#define SYS_WAIT     18   /* wait(pid, int *kod)             — bolaning tugashini kutish */
+#define SYS_PIPE     19   /* pipe(int fds[2])                — fds[0] o'qish, fds[1] yozish uchi */
+#define SYS_COUNT    20
 
 /* open() flaglari (VFS dagi bilan bir xil) */
 #define O_READ    0x01
@@ -46,7 +50,10 @@ struct sysinfo {
     unsigned int user_pages;     /* shu jarayon egallagan sahifalar */
     char         os_name[16];
     char         os_version[8];
+    unsigned int stdio;          /* v0.8: SI_STDIN_PIPE | SI_STDOUT_PIPE — yo'naltirilganmi */
 };
+#define SI_STDIN_PIPE  1         /* stdin klaviatura emas (kanal) */
+#define SI_STDOUT_PIPE 2         /* stdout ekran emas (kanal) */
 
 /* Oyna hodisalari (v0.7) */
 #define GUI_EV_NONE       0

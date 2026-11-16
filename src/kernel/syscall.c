@@ -13,6 +13,15 @@
  * O'Z xotirasida bo'lishi va sahifalari mavjud bo'lishi shart. Aks holda
  * dastur kernelni o'zi uchun boshqa xotirani o'qishga yoki yozishga majbur
  * qilishi mumkin edi.
+ *
+ * v0.8: syscall ichida uzilishlar YOQIQ (syscall_handler boshidagi sti).
+ * Avval butun syscall uzilishlarsiz bajarilardi: dastur diskka yozayotganda
+ * taymer ham, sichqoncha ham kutardi. Endi syscall o'rtasida ham boshqa
+ * vazifaga o'tish mumkin — umumiy ma'lumotlar mutexlar bilan himoyalangan
+ * (vfs, ata, wm). Bu "preemptible kernel" deyiladi.
+ *
+ * Standart kirish/chiqish (stdin/stdout): jarayonning fd_in / fd_out i
+ * o'rnatilgan bo'lsa (pipe: "ls | wc"), fd 0 / fd 1 o'sha kanalga yo'naltiriladi.
  */
 #include "process.h"
 #include "syscall_nums.h"
@@ -26,6 +35,7 @@
 #include "kprintf.h"
 #include "klog.h"
 #include "gui.h"
+#include "sync.h"
 
 #define EFAULT     (-14)          /* noto'g'ri ko'rsatkich */
 #define ENOSYS     (-38)          /* bunday syscall yo'q */
@@ -61,6 +71,10 @@ static int32_t read_line(char *buf, uint32_t len)
     uint32_t n = 0;
     while (n < len) {
         char c = keyboard_getchar();
+        if (c == 0 && task_should_abort())
+            return n ? (int32_t)n : VFS_EINTR;   /* Ctrl+C: kutish to'xtatildi */
+        if (c == KEY_DELETE && n == 0)       /* Ctrl+D bo'sh qatorda — kiritish tugadi (EOF) */
+            return 0;
         if (c == '\n') {
             vga_putc('\n');
             buf[n++] = '\n';
@@ -88,7 +102,17 @@ static int32_t sys_write(uint32_t fd, uint32_t buf, uint32_t len)
     if (!user_ok(buf, len, false))
         return EFAULT;
     const char *s = (const char *)buf;
+    task_t *t = task_current();
 
+    if (fd == 1 && t->fd_out >= 0) {          /* stdout kanalga (yoki faylga) yo'naltirilgan */
+        int32_t r = vfs_write(t->fd_out, s, len);
+        if (r == VFS_EPIPE) {
+            /* O'qiydigan tomon yopilgan (masalan "ota | grep" da grep tugadi).
+               Unix dagidek (SIGPIPE) jarayon jimgina to'xtatiladi */
+            task_signal_kill(t->pid, EXIT_PIPE);
+        }
+        return r;
+    }
     if (fd == 1 || fd == 2) {
         uint8_t old = vga_get_color();
         if (fd == 2)
@@ -99,9 +123,12 @@ static int32_t sys_write(uint32_t fd, uint32_t buf, uint32_t len)
             vga_set_color(old & 0x0F, old >> 4);
         return (int32_t)len;
     }
-    if (!vfs_fd_owned(fd, task_current()->pid))
+    if (!vfs_fd_owned(fd, t->pid))
         return VFS_EBADF;                     /* boshqa jarayonning fayli */
-    return vfs_write(fd, s, len);
+    int32_t r = vfs_write(fd, s, len);
+    if (r == VFS_EPIPE)
+        task_signal_kill(t->pid, EXIT_PIPE);
+    return r;
 }
 
 static int32_t sys_read(uint32_t fd, uint32_t buf, uint32_t len)
@@ -110,15 +137,18 @@ static int32_t sys_read(uint32_t fd, uint32_t buf, uint32_t len)
         len = IO_MAX;
     if (!user_ok(buf, len, true))
         return EFAULT;
+    task_t *t = task_current();
+    if (fd == 0 && t->fd_in >= 0)             /* stdin kanaldan */
+        return vfs_read(t->fd_in, (void *)buf, len);
     if (fd == 0) {
         /*
          * Klaviatura bitta: uni faqat OLDINGI PLANDAGI dastur o'qiy oladi.
          * Fon jarayoni ("dastur &") o'qimoqchi bo'lsa, u shell bilan tugmalarni
          * talashib qolardi. Unix da bunday jarayonga SIGTTIN yuboriladi; biz
-         * uni xabar bilan to'xtatamiz.
+         * uni xabar bilan to'xtatamiz. v0.8: oldingi planda butun jarayon
+         * guruhi (pipeline) turadi, shuning uchun pgid bilan solishtiramiz.
          */
-        task_t *t = task_current();
-        if (task_foreground() != t->pid) {
+        if (task_foreground() != t->pgid) {
             uint8_t old = vga_get_color();
             vga_set_color(VGA_DARK_GREY, VGA_BLACK);
             kprintf("\n[PID %u] %s: fon jarayoni klaviaturadan o'qiy olmaydi - to'xtatildi\n",
@@ -207,6 +237,8 @@ static int32_t sys_sysinfo(uint32_t ptr)
             si->task_count++;
     strncpy(si->os_name, OS_NAME, sizeof(si->os_name) - 1);
     strncpy(si->os_version, OS_VERSION, sizeof(si->os_version) - 1);
+    si->stdio = (task_current()->fd_in >= 0 ? SI_STDIN_PIPE : 0) |
+                (task_current()->fd_out >= 0 ? SI_STDOUT_PIPE : 0);
     return 0;
 }
 
@@ -240,10 +272,111 @@ static int32_t sys_win_event(uint32_t id, uint32_t uev)
     return gui_sys_event((int)id, (struct gui_event *)uev);
 }
 
+/* ---------------------- Jarayonlar va kanallar (v0.8) ---------------------- */
+
+/*
+ * Bolaning stdin/stdout i uchun deskriptor tayyorlash:
+ *   want >= 0 — ota bergan o'z deskriptori (masalan, pipe uchi);
+ *   want < 0  — otaning o'zidagi yo'naltirish meros qoladi (bo'lsa).
+ * Har doim NUSXA (dup) olinadi: ota o'z deskriptorini o'zi yopadi.
+ */
+static int child_fd(int want, int inherited, uint32_t pid, int *out)
+{
+    *out = -1;
+    int src = want >= 0 ? want : inherited;
+    if (src < 0)
+        return 0;
+    if (want >= 0 && !vfs_fd_owned(want, pid))
+        return VFS_EBADF;
+    int fd = vfs_dup(src, pid);
+    if (fd < 0)
+        return fd;
+    *out = fd;
+    return 0;
+}
+
+/* spawn(yo'l, argumentlar, io) — io: 0 yoki int[2] = {stdin, stdout}, -1 — meros */
+static int32_t sys_spawn(uint32_t upath, uint32_t uargs, uint32_t uio)
+{
+    char path[VFS_PATH_MAX], args[128];
+    if (!copy_string(path, upath, sizeof(path)))
+        return EFAULT;
+    args[0] = 0;
+    if (uargs && !copy_string(args, uargs, sizeof(args)))
+        return EFAULT;
+    int io[2] = { -1, -1 };
+    if (uio) {
+        if (!user_ok(uio, sizeof(io), false))
+            return EFAULT;
+        memcpy(io, (const void *)uio, sizeof(io));
+    }
+
+    task_t *t = task_current();
+    int children = 0;
+    for (int i = 0; i < MAX_TASKS; i++) {
+        task_t *k = task_get(i);
+        if (k->state != TASK_UNUSED && k->parent_pid == t->pid)
+            children++;
+    }
+    if (children >= 4)
+        return PROC_ETASKS;                   /* "fork bomb" bo'lmasin: bittada ko'pi bilan 4 bola */
+
+    spawn_opts_t o = { .fd_in = -1, .fd_out = -1, .pgid = t->pgid };
+    int err = child_fd(io[0], t->fd_in, t->pid, &o.fd_in);
+    if (!err)
+        err = child_fd(io[1], t->fd_out, t->pid, &o.fd_out);
+    if (!err) {
+        int32_t pid = process_spawn_ex(path, args, &o);
+        if (pid > 0)
+            return pid;                       /* deskriptorlar endi bolaniki */
+        err = pid;
+    }
+    if (o.fd_in >= 0)
+        vfs_close(o.fd_in);
+    if (o.fd_out >= 0)
+        vfs_close(o.fd_out);
+    return err;
+}
+
+/* wait(pid) — o'z bolasining tugashini kutish; chiqish kodini qaytaradi */
+static int32_t sys_wait(uint32_t pid, uint32_t ucode)
+{
+    task_t *t = task_current();
+    task_t *k = task_find(pid);
+    if (!k || k->parent_pid != t->pid || k == t)
+        return VFS_ENOENT;                    /* bunday bola yo'q */
+    if (ucode && !user_ok(ucode, 4, true))
+        return EFAULT;
+    int32_t code = task_wait(pid);
+    if (code == SYNC_EINTR && task_should_abort())
+        return VFS_EINTR;
+    task_reap_pid(pid);                       /* zombi bolani tozalaymiz */
+    if (ucode)
+        *(int32_t *)ucode = code;
+    return 0;
+}
+
+static int32_t sys_pipe(uint32_t ufds)
+{
+    if (!user_ok(ufds, 8, true))
+        return EFAULT;
+    if (vfs_fd_count(task_current()->pid) + 2 > FDS_PER_PROCESS)
+        return VFS_EMFILE;
+    int fds[2];
+    int err = vfs_pipe(fds);
+    if (err)
+        return err;
+    memcpy((void *)ufds, fds, sizeof(fds));
+    return 0;
+}
+
 void syscall_handler(registers_t *r)
 {
     uint32_t a = r->ebx, b = r->ecx, c = r->edx;
     int32_t ret;
+
+    /* v0.8: syscall davomida uzilishlar yoqiq — kernel "preemptible" */
+    __asm__ volatile ("sti");
 
     switch (r->eax) {
     case SYS_EXIT:     task_exit_code((int32_t)a); return;   /* qaytmaydi */
@@ -263,10 +396,14 @@ void syscall_handler(registers_t *r)
     case SYS_WIN_UPDATE: ret = sys_win_update(a, b); break;
     case SYS_WIN_EVENT:  ret = sys_win_event(a, b); break;
     case SYS_WIN_CLOSE:  ret = gui_sys_close((int)a); break;
+    case SYS_SPAWN:      ret = sys_spawn(a, b, c); break;
+    case SYS_WAIT:       ret = sys_wait(a, b); break;
+    case SYS_PIPE:       ret = sys_pipe(a); break;
     default:
         klog("PID %u (%s): noma'lum syscall %u", task_current()->pid, task_current()->name, r->eax);
         ret = ENOSYS;
         break;
     }
+    __asm__ volatile ("cli");                 /* qaytish yo'li (iret) uzilishlarsiz */
     r->eax = (uint32_t)ret;                   /* natija dasturga EAX orqali qaytadi */
 }

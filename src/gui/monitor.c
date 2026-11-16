@@ -8,6 +8,7 @@
  *   - uzilishlar soni (/proc/interrupts bilan bir xil).
  */
 #include "gui.h"
+#include "sync.h"
 #include "task.h"
 #include "memory.h"
 #include "drivers.h"
@@ -122,7 +123,15 @@ static void redraw(window_t *w)
         gfx_text(s, 12, y, buf, COL_TEXT, GFX_TRANSPARENT);
         gfx_text(s, 52, y, t->user ? "U" : "K", t->user ? RGB(36, 130, 80) : COL_TEXT_DIM, GFX_TRANSPARENT);
         gfx_text(s, 76, y, t->name, COL_TEXT, GFX_TRANSPARENT);
-        gfx_text(s, 220, y, state_name(t->state), COL_TEXT_DIM, GFX_TRANSPARENT);
+        const char *st = state_name(t->state);
+        if (t->state == TASK_BLOCKED && t->wait_reason) {     /* v0.8: nimani kutyapti */
+            if (t->waiting_mutex)
+                ksnprintf(buf, 14, "qulf %s", t->waiting_mutex->name);
+            else
+                ksnprintf(buf, 14, "%s", t->wait_reason);
+            st = buf;
+        }
+        gfx_text(s, 220, y, st, COL_TEXT_DIM, GFX_TRANSPARENT);
         ksnprintf(buf, sizeof(buf), "%u%%", t->cpu_percent);
         gfx_text(s, 330, y, buf, COL_TEXT, GFX_TRANSPARENT);
         if (t->user)

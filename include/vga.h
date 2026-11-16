@@ -19,6 +19,7 @@ enum vga_color {
 void    vga_init(void);
 void    vga_clear(void);
 void    vga_putc(char c);
+void    vga_set_capture(bool (*hook)(char c));   /* v0.8: shell pipeline (ls | wc) */
 void    vga_puts(const char *s);
 void    vga_set_color(uint8_t fg, uint8_t bg);
 uint8_t vga_get_color(void);

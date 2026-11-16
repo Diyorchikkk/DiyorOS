@@ -226,8 +226,19 @@ static void vga_putc_locked(char c);
 
 /* Bir nechta vazifa (shell va dasturlar) ekranga yozadi: kursor buzilmasligi uchun
    har bir belgi uzilishlarsiz chiqariladi */
+static bool (*capture_hook)(char c) = 0;
+
+/* v0.8: shell ichki buyruqning chiqishini kanalga yo'naltirish uchun ("ls | wc").
+   Ilgak true qaytarsa — belgi ekranga chiqmaydi */
+void vga_set_capture(bool (*hook)(char c))
+{
+    capture_hook = hook;
+}
+
 void vga_putc(char c)
 {
+    if (capture_hook && capture_hook(c))
+        return;
     uint32_t f = irq_save();
     vga_putc_locked(c);
     if (c == '\b')

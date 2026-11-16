@@ -16,6 +16,8 @@
 #include "config.h"
 #include "cpu.h"
 #include "klog.h"
+#include "sync.h"
+#include "pipe.h"
 
 #define GEN_BUF_SIZE 4096
 
@@ -101,13 +103,15 @@ static int gen_cpuinfo(char *b, uint32_t n)
 static int gen_tasks(char *b, uint32_t n)
 {
     static const char *states[] = { "-", "tayyor", "ishlayapti", "uxlayapti", "kutyapti", "tugagan" };
-    int len = ksnprintf(b, n, "PID  NOMI        HOLAT        CPU%%\n");
+    int len = ksnprintf(b, n, "PID  PGID  NOMI        HOLAT        CPU%%  KUTMOQDA\n");
     for (int i = 0; i < MAX_TASKS; i++) {
         task_t *t = task_get(i);
         if (t->state == TASK_UNUSED)
             continue;
-        len += ksnprintf(b + len, len < (int)n ? n - len : 0, "%3u  %-10s  %-11s  %3u%%\n",
-                         t->pid, t->name, states[t->state], t->cpu_percent);
+        const char *why = t->wait_reason ? t->wait_reason : "-";
+        const char *what = t->waiting_mutex ? t->waiting_mutex->name : "";
+        len += ksnprintf(b + len, len < (int)n ? n - len : 0, "%3u  %4u  %-10s  %-11s  %3u%%  %s %s\n",
+                         t->pid, t->pgid, t->name, states[t->state], t->cpu_percent, why, what);
     }
     return len;
 }
@@ -148,6 +152,17 @@ static int gen_kmsg(char *b, uint32_t n)
     return (int)got;
 }
 
+/* v0.8: mutexlar, semaforlar va kanallar holati */
+static int gen_sync(char *b, uint32_t n)
+{
+    int len = sync_report(b, n);
+    if (len < (int)n - 2) {
+        b[len++] = '\n';
+        len += pipe_report(b + len, n - len);
+    }
+    return len;
+}
+
 /* ------------------------------ Fayl tizimi ------------------------------ */
 
 static const vfs_ops_t procfs_ops;
@@ -159,6 +174,7 @@ static vfs_node_t proc_files[] = {
     { .name = "kmsg",       .generate = gen_kmsg       },
     { .name = "meminfo", .generate = gen_meminfo },
     { .name = "mounts",  .generate = gen_mounts  },
+    { .name = "sync",    .generate = gen_sync    },
     { .name = "tasks",   .generate = gen_tasks   },
     { .name = "uptime",  .generate = gen_uptime  },
     { .name = "version", .generate = gen_version },

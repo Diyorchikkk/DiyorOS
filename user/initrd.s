@@ -37,6 +37,11 @@ initrd_table:
     ENTRY pi
     ENTRY mandel
     ENTRY ilon
+    ENTRY wc
+    ENTRY grep
+    ENTRY sanoq
+    ENTRY ota
+    ENTRY head
     .long 0, 0, 0              # ro'yxat oxiri
 
     BLOB hello
@@ -48,5 +53,10 @@ initrd_table:
     BLOB pi
     BLOB mandel
     BLOB ilon
+    BLOB wc
+    BLOB grep
+    BLOB sanoq
+    BLOB ota
+    BLOB head
 
 .section .note.GNU-stack, "", @progbits

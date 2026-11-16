@@ -50,6 +50,7 @@
 #include "vfs.h"
 #include "kernel.h"
 #include "klog.h"
+#include "sync.h"
 
 static task_t tasks[MAX_TASKS];
 static task_t *current = 0;
@@ -100,6 +101,8 @@ void sched_init(void)
     shell_task->pid = next_pid++;
     strcpy(shell_task->name, "shell");
     shell_task->state = TASK_RUNNING;
+    shell_task->pgid = shell_task->pid;
+    shell_task->fd_in = shell_task->fd_out = -1;
     shell_task->stack_guard = (uint32_t *)boot_stack_bottom;   /* boot.s dagi 16 KB stek */
     *shell_task->stack_guard = STACK_CANARY;
     current = shell_task;
@@ -137,6 +140,8 @@ uint32_t task_create(const char *name, task_entry_t entry, uint32_t arg)
 
     memset(t, 0, sizeof(*t));
     t->pid   = next_pid++;
+    t->pgid  = t->pid;
+    t->fd_in = t->fd_out = -1;
     strncpy(t->name, name, TASK_NAME_LEN - 1);
     t->stack = stack;
     t->stack_guard = (uint32_t *)stack;
@@ -176,7 +181,11 @@ static void reap(uint32_t only_pid)
         uint8_t *stack = 0;
         uint32_t *dir = 0;
         uint32_t pid = 0;
-        if (t->state == TASK_ZOMBIE && t != current && t->pid != foreground_pid) {
+        /* Otasi tirik user jarayon bo'lsa, zombini u o'zi wait() bilan yig'adi
+           (chiqish kodini bilishi kerak). Ota o'lgach — shu yerda tozalanadi */
+        task_t *parent = (!only_pid && t->state == TASK_ZOMBIE) ? task_find(t->parent_pid) : 0;
+        bool parent_waits = parent && parent->user && parent->state != TASK_ZOMBIE;
+        if (t->state == TASK_ZOMBIE && t != current && t->pid != foreground_pid && !parent_waits) {
             stack = t->stack;
             dir = t->page_dir;
             pid = t->pid;
@@ -215,6 +224,7 @@ static void make_zombie(task_t *t, int32_t code)
     if (fpu_owner == t)
         fpu_owner = 0;                 /* uning FPU holati endi hech kimga kerak emas */
     keyboard_cancel_waiter(t);
+    sync_task_died(t);                 /* navbatlardan chiqarish, ushlagan mutexlarini bo'shatish */
     wake_waiters(t->pid);
     need_resched = true;
 }
@@ -234,32 +244,91 @@ bool task_kill(uint32_t pid)
 
     uint32_t flags = irq_save();
     task_t *t = task_find(pid);
-    if (t && t->state != TASK_ZOMBIE) {
-        /* Vazifa hozir ishlamayapti (ishlayotgani — biz), shuning uchun
-           uni darhol to'xtatsa bo'ladi: endi scheduler uni tanlamaydi */
-        make_zombie(t, EXIT_KILLED);
-        strcpy(t->note, "o'ldirildi (kill)");
+    if (!t || t->state == TASK_ZOMBIE) {
         irq_restore(flags);
+        return false;
+    }
+    if (t->user) {
+        /*
+         * User jarayon (v0.8): darhol o'ldirmaymiz — u hozir kernel ichida, masalan
+         * fayl yozish o'rtasida bo'lishi mumkin. Signal qo'yamiz; jarayon kernel ishini
+         * tugatib, user rejimga qaytayotganda o'zi chiqadi (task_check_signals).
+         */
+        irq_restore(flags);
+        task_signal_kill(pid, EXIT_KILLED);
+        for (int i = 0; i < 100; i++) {            /* 1 soniyagacha kutamiz */
+            task_t *k = task_find(pid);
+            if (!k || k->state == TASK_ZOMBIE)
+                break;
+            task_sleep_ticks(1);
+        }
+        task_t *k = task_find(pid);
+        if (k)
+            strcpy(k->note, "o'ldirildi (kill)");
         task_reap();
         return true;
     }
+    /* Kernel oqimi: darhol to'xtatamiz. U ushlab turgan mutexlar sync_task_died da
+       navbatdagiga topshiriladi (robust mutex) */
+    make_zombie(t, EXIT_KILLED);
+    strcpy(t->note, "o'ldirildi (kill)");
     irq_restore(flags);
-    return false;
+    task_reap();
+    return true;
 }
 
-/* Ctrl+C: klaviatura uzilishi ichidan chaqiriladi, shuning uchun xotirani
-   bo'shatmaymiz — faqat ZOMBIE qilamiz, qolganini shell (task_reap) qiladi */
+/*
+ * Signal (v0.8): jarayonga "to'xta" deyish. Uzilish ichidan ham chaqiriladi (Ctrl+C).
+ * Jarayon darhol o'ldirilmaydi: kill_pending belgisi qo'yiladi va u uxlayotgan
+ * bo'lsa uyg'otiladi. Keyin u o'zi xavfsiz joyda tugaydi:
+ *   - user rejimga qaytishdan oldin (task_check_signals);
+ *   - "uzilishli" kutishda (klaviatura, pipe, semafor, sleep, wait) — kutish
+ *     SYNC_EINTR bilan qaytadi, syscall tugaydi, keyin yana birinchi holat.
+ * Shu tufayli jarayon kernel qulfini (mutex) ushlab turgan holda o'lmaydi.
+ * Unix dagi signal mexanizmi xuddi shu g'oyaga asoslangan.
+ */
 void task_signal_kill(uint32_t pid, int32_t code)
 {
     uint32_t flags = irq_save();
     task_t *t = task_find(pid);
-    if (t && t->user && t->state != TASK_ZOMBIE)
-        make_zombie(t, code);
+    if (t && t->user && t->state != TASK_ZOMBIE && !t->kill_pending) {
+        t->kill_code = code;
+        t->kill_pending = true;
+        task_wake(t);
+    }
     irq_restore(flags);
+}
+
+void task_signal_group(uint32_t pgid, int32_t code)
+{
+    if (!pgid)
+        return;
+    uint32_t flags = irq_save();
+    for (int i = 0; i < MAX_TASKS; i++)
+        if (tasks[i].state != TASK_UNUSED && tasks[i].user && tasks[i].pgid == pgid)
+            task_signal_kill(tasks[i].pid, code);
+    irq_restore(flags);
+}
+
+bool task_should_abort(void)
+{
+    return active && current->user && current->kill_pending;
+}
+
+/* idt.c: har bir uzilish / syscall oxirida. Jarayon user rejimga qaytmoqchi va
+   unga signal kelgan bo'lsa — shu yerda tugaydi (kernel qulflari bo'shatilgan) */
+void task_check_signals(registers_t *r)
+{
+    if (active && (r->cs & 3) == 3 && current->kill_pending)
+        task_exit_code(current->kill_code);
 }
 
 void task_exit_code(int32_t code)
 {
+    /* v0.8: jarayon fayl va kanallarini O'ZI yopadi — darhol. Masalan "ls | wc" da
+       ls tugashi bilan wc EOF ni ko'radi (zombi tozalanishini kutmaydi) */
+    if (active && current->user)
+        vfs_close_owner(current->pid);
     __asm__ volatile ("cli");
     make_zombie(current, code);
     task_yield();                      /* boshqa vazifaga o'tamiz va bu yerga qaytmaymiz */
@@ -287,8 +356,14 @@ int32_t task_wait(uint32_t pid)
             irq_restore(flags);
             return code;
         }
+        if (task_should_abort()) {     /* user jarayon kutayotganda o'zi to'xtatildi */
+            irq_restore(flags);
+            return SYNC_EINTR;
+        }
         current->wait_pid = pid;
+        current->wait_reason = "wait";
         task_block();                  /* make_zombie -> wake_waiters bizni uyg'otadi */
+        current->wait_reason = 0;
         irq_restore(flags);
     }
 }
@@ -302,7 +377,8 @@ uint32_t task_foreground(void)         { return foreground_pid; }
  * ring 3 ga, dasturning entry nuqtasiga va uning o'z stekiga o'tkazadi.
  */
 uint32_t task_create_user(const char *name, uint32_t *page_dir, uint32_t entry,
-                          uint32_t user_esp, uint32_t brk, uint32_t pages)
+                          uint32_t user_esp, uint32_t brk, uint32_t pages,
+                          const spawn_opts_t *opts)
 {
     uint8_t *stack = kmalloc(TASK_STACK_SIZE);   /* jarayonning KERNEL steki (syscall va uzilishlar uchun) */
     if (!stack)
@@ -327,6 +403,16 @@ uint32_t task_create_user(const char *name, uint32_t *page_dir, uint32_t entry,
     t->brk        = brk;
     t->user_pages = pages;
     t->parent_pid = current->pid;
+    t->fd_in      = (opts && opts->fd_in > 0) ? opts->fd_in : -1;
+    t->fd_out     = (opts && opts->fd_out > 0) ? opts->fd_out : -1;
+    t->pgid       = (opts && opts->pgid) ? opts->pgid : t->pid;
+    /* stdin/stdout deskriptorlari endi bolaniki: u tugaganda ular yopiladi */
+    vfs_fd_set_owner(t->fd_in, t->pid);
+    vfs_fd_set_owner(t->fd_out, t->pid);
+    /* Oldingi plan — shu yerda, vazifa ishga tushishidan OLDIN (bo'linmas): aks holda
+       dastur belgilanmasdan klaviaturadan o'qimoqchi bo'lib, "fon jarayoni" deb to'xtatilardi */
+    if (opts && opts->foreground)
+        foreground_pid = t->pgid;
 
     /* Kadr stek tepasiga TO'G'RI joylashadi: keyingi uzilishlarda protsessor
        aynan shu joyga (TSS.esp0) yozadi */

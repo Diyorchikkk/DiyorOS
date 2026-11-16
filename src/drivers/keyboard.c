@@ -135,7 +135,7 @@ static void keyboard_handler(registers_t *r)
             return;                              /* grafik oyna (o'yin) uchun — dastur o'ldirilmaydi */
         uint32_t fg = task_foreground();
         if (fg)
-            task_signal_kill(fg, EXIT_CTRL_C);   /* oldingi plandagi dasturni to'xtatish */
+            task_signal_group(fg, EXIT_CTRL_C);  /* oldingi plandagi dastur(lar)ni to'xtatish: a | b | c */
         else
             buffer_push(KEY_CTRL_C);             /* shell: kiritilayotgan qatorni bekor qilish */
         return;
@@ -193,8 +193,16 @@ char keyboard_getchar(void)
             return c;
         }
         if (sched_active()) {
+            if (task_should_abort()) {       /* v0.8: jarayonga signal keldi — kutmaymiz */
+                irq_restore(flags);
+                return 0;
+            }
             waiter = task_current();
+            task_current()->wait_reason = "klaviatura";
             task_block();
+            task_current()->wait_reason = 0;
+            if (waiter == task_current())
+                waiter = 0;
         } else {
             __asm__ volatile ("sti; hlt");
         }
