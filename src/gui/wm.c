@@ -1071,7 +1071,8 @@ const char *gui_start(void)
     if (running)
         return "grafik rejim allaqachon ishlayapti";
     if (!fb_info()->available)
-        return "grafik adapter topilmadi (QEMU/UTM da 'VGA' videokarta kerak)";
+        return fb_info()->boot ? "ekran formati grafik interfeysga mos emas (32 bit RGB kerak)"
+                               : "grafik adapter topilmadi (QEMU/UTM da 'VGA' videokarta kerak)";
     if (!surface_init(&back, SCREEN_W, SCREEN_H))
         return "orqa bufer uchun xotira yetmadi (3 MB)";
     /* Avval matnni xotiraga ko'chiramiz: grafik rejim yoqilgach 0xB8000 dagi matn yo'qoladi */
@@ -1079,10 +1080,12 @@ const char *gui_start(void)
     if (!fb_set_mode(SCREEN_W, SCREEN_H)) {
         vga_redirect(false);
         surface_free(&back);
-        return "videokarta 1024x768 rejimini qabul qilmadi";
+        return fb_info()->boot ? "ekran 1024x768 dan kichik" : "videokarta 1024x768 rejimini qabul qilmadi";
     }
     const fb_info_t *fi = fb_info();
     surface_wrap(&screen, fi->pixels, (int)fi->width, (int)fi->height, (int)(fi->pitch / 4));
+    if (fi->width > SCREEN_W || fi->height > SCREEN_H)    /* katta ekran: chetlari qora */
+        gfx_fill(&screen, 0, 0, (int)fi->width, (int)fi->height, 0);
 
     memset(windows, 0, sizeof(windows));
     memset(tracked, 0, sizeof(tracked));

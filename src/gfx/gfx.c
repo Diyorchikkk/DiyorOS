@@ -10,6 +10,14 @@
 #include "memory.h"
 #include "string.h"
 
+/* VGA matn rejimining 16 rangi — grafik ekrandagi terminal va fbcon uchun (v0.9) */
+const uint32_t vga_palette_rgb[16] = {
+    RGB(16, 20, 26),    RGB(46, 91, 186),   RGB(63, 163, 77),   RGB(42, 161, 179),
+    RGB(194, 59, 59),   RGB(163, 71, 186),  RGB(192, 138, 40),  RGB(200, 204, 208),
+    RGB(106, 112, 120), RGB(92, 141, 240),  RGB(107, 214, 107), RGB(95, 215, 232),
+    RGB(240, 106, 106), RGB(224, 123, 232), RGB(242, 209, 75),  RGB(255, 255, 255),
+};
+
 /* ------------------------------- To'rtburchaklar ------------------------------- */
 
 rect_t rect_make(int x, int y, int w, int h)

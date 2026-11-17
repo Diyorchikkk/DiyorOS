@@ -31,6 +31,7 @@ typedef struct {
 } surface_t;
 
 extern const uint8_t font8x16[128][16];
+extern const uint32_t vga_palette_rgb[16];   /* VGA ning 16 rangi RGB da */
 
 /* Sirt */
 bool     surface_init(surface_t *s, int w, int h);   /* kmalloc bilan */

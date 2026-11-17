@@ -29,6 +29,7 @@ uint32_t pmm_alloc_frame(void);          /* bo'sh frame ning fizik manzili, 0 â€
 void     pmm_free_frame(uint32_t addr);
 uint32_t pmm_total_frames(void);
 uint32_t pmm_used_frames(void);
+uint32_t pmm_ram_total_mb(void);         /* v0.9: kompyuterdagi butun RAM */
 uint32_t pmm_memory_top(void);           /* ishlatsa bo'ladigan RAM ning oxirgi manzili */
 int      pmm_region_count(void);
 const mem_region_t *pmm_region(int i);
@@ -37,11 +38,17 @@ const mem_region_t *pmm_region(int i);
 #define PAGE_PRESENT 0x1    /* sahifa xotirada bor */
 #define PAGE_RW      0x2    /* yozish mumkin */
 #define PAGE_USER    0x4    /* foydalanuvchi dasturlari (ring 3) ham ko'ra oladi */
+#define PAGE_PCD     0x10   /* keshlanmasin: qurilma registrlari (MMIO) uchun shart (v0.9) */
+
+/* v0.9: qurilma registrlari (MMIO) uchun virtual hudud â€” framebuffer dan keyin, 4 MB */
+#define MMIO_VIRT    0xE4000000u
+#define MMIO_SIZE    0x400000u
 
 void     paging_init(void);
 bool     paging_map(uint32_t virt, uint32_t phys, uint32_t flags);
 void     paging_unmap(uint32_t virt);
 bool     paging_translate(uint32_t virt, uint32_t *phys);
+void    *paging_map_mmio(uint32_t phys, uint32_t size);   /* v0.9: qurilma registrlarini ulash */
 uint32_t paging_identity_limit(void);
 uint32_t paging_directory_address(void);
 

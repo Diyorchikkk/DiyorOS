@@ -25,6 +25,7 @@
  * rejimga o'tishdan oldin shriftni o'qib saqlaymiz, qaytganda joyiga yozamiz.
  */
 #include "fb.h"
+#include "fbcon.h"
 #include "pci.h"
 #include "io.h"
 #include "memory.h"
@@ -64,8 +65,52 @@ static uint16_t vbe_read(uint16_t index)
     return inw(VBE_DATA);
 }
 
+/* ---------------- v0.9: bootloader bergan framebuffer ---------------- */
+
+void fb_boot_setup(uint32_t phys, uint32_t w, uint32_t h, uint32_t pitch, uint32_t bpp,
+                   uint8_t rpos, uint8_t gpos, uint8_t bpos)
+{
+    memset(&info, 0, sizeof(info));
+    info.boot = true;
+    info.phys = phys;
+    info.width = w;
+    info.height = h;
+    info.pitch = pitch;
+    info.bpp = bpp;
+    info.red_pos = rpos;
+    info.green_pos = gpos;
+    info.blue_pos = bpos;
+    info.vram_bytes = pitch * h;
+    info.pixels = (uint32_t *)phys;            /* paging hali o'chiq: fizik = virtual */
+    /* Grafik interfeys 0x00RRGGBB formatdagi 32 bitli piksellar bilan ishlaydi */
+    info.available = bpp == 32 && rpos == 16 && gpos == 8 && bpos == 0;
+}
+
+/* Paging yoqilgach framebuffer ni FB_VIRT ga ulaymiz (sahifa jadvallari oldindan bor —
+   barcha jarayonlarda ko'rinadi). Juda katta bo'lsa — faqat sig'adigan qismi */
+bool fb_boot_map(void)
+{
+    if (!info.boot)
+        return false;
+    uint32_t size = info.pitch * info.height;
+    if (size > FB_MAX_SIZE)
+        size = FB_MAX_SIZE;
+    uint32_t base = info.phys & ~(PAGE_SIZE - 1);
+    uint32_t extra = info.phys - base;
+    for (uint32_t off = 0; off < size + extra; off += PAGE_SIZE)
+        if (!paging_map(FB_VIRT + off, base + off, PAGE_RW))
+            return false;
+    info.pixels = (uint32_t *)(FB_VIRT + extra);
+    return true;
+}
+
 bool fb_detect(void)
 {
+    if (info.boot) {                            /* ekranni bootloader bergan: BGA kerak emas */
+        klog("fb: bootloader framebuffer 0x%08x, %ux%u, %u bit, pitch %u",
+             info.phys, info.width, info.height, info.bpp, info.pitch);
+        return true;
+    }
     memset(&info, 0, sizeof(info));
     uint16_t id = vbe_read(VBE_ID);
     if (id < 0xB0C0 || id > 0xB0CF)
@@ -191,6 +236,16 @@ bool fb_set_mode(uint32_t w, uint32_t h)
 {
     if (!info.available || info.active)
         return false;
+    if (info.boot) {
+        /* Rejimni almashtirib bo'lmaydi: ekran yetarlicha katta bo'lsa — o'shani ishlatamiz.
+           Matn konsoli ekranni grafik interfeysga bo'shatib beradi */
+        if (w > info.width || h > info.height)
+            return false;
+        fbcon_suspend();
+        info.active = true;
+        klog("fb: grafik interfeys bootloader ekranida (%ux%u)", info.width, info.height);
+        return true;
+    }
     uint32_t size = w * h * 4;
     if (size > info.vram_bytes)
         return false;
@@ -230,6 +285,12 @@ bool fb_set_mode(uint32_t w, uint32_t h)
 
 void fb_text_mode(void)
 {
+    if (info.boot) {                            /* "matn rejimi" = matn konsolini qayta chizish */
+        info.active = false;
+        fbcon_resume();
+        klog("fb: matn konsoliga qaytildi");
+        return;
+    }
     uint32_t flags = irq_save();
     vbe_write(VBE_ENABLE, VBE_DISABLED);
     vga_write_mode3();
@@ -247,6 +308,10 @@ void fb_emergency_text(void)
 {
     if (!info.active)
         return;
+    if (info.boot) {                            /* panic xabarini fbcon chizadi (panic_flush) */
+        info.active = false;
+        return;
+    }
     vbe_write(VBE_ENABLE, VBE_DISABLED);
     vga_write_mode3();
     font_restore();

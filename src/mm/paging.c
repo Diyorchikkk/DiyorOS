@@ -158,6 +158,11 @@ void paging_init(void)
         if (!get_table(kernel_directory, addr, true, 0))
             panic("paging_init: framebuffer jadvallari uchun xotira yetmadi");
 
+    /* v0.9: qurilma registrlari (AHCI va h.k.) hududi — xuddi shu sababdan oldindan */
+    for (uint32_t addr = MMIO_VIRT; addr < MMIO_VIRT + MMIO_SIZE; addr += 0x400000)
+        if (!get_table(kernel_directory, addr, true, 0))
+            panic("paging_init: MMIO jadvallari uchun xotira yetmadi");
+
     /* Shell steki ostidagi qo'riqchi sahifa: xaritada yo'q — stek to'lsa darhol xato */
     table_entry_clear((uint32_t)boot_stack_guard);
     tss_set_df_cr3((uint32_t)kernel_directory);
@@ -208,7 +213,17 @@ uint32_t *paging_create_directory(void)
     return dir;
 }
 
-/* Jarayon tugaganda: uning barcha user sahifalari, Page Table lari va directory si */
+/*
+ * Jarayon tugaganda: uning barcha user sahifalari, Page Table lari va directory si.
+ *
+ * v0.9: har bir sahifa bo'shatishdan oldin NOL bilan tozalanadi:
+ *   1) xavfsizlik — frame keyingi egasiga (boshqa jarayon yoki kernel) oldingi
+ *      jarayonning ma'lumotini (parollar, fayl mazmuni) ko'rsatmasligi kerak;
+ *   2) emulyatorlar (QEMU, UTM) bajarilgan kod sahifalarini kuzatadi: kod turgan
+ *      sahifa keyin oddiy xotira sifatida ishlatilsa, unga har bir yozish sekin yo'ldan
+ *      o'tardi — "sinx poyga" biror dasturdan keyin 30-40 marta sekinlashardi.
+ *      Butun sahifani yozib chiqish bu belgini bir marta, shu yerning o'zida olib tashlaydi.
+ */
 void paging_free_directory(uint32_t *dir)
 {
     if (!dir || dir == kernel_directory)
@@ -218,8 +233,10 @@ void paging_free_directory(uint32_t *dir)
             continue;
         uint32_t *table = (uint32_t *)(dir[i] & ~0xFFFu);
         for (int j = 0; j < 1024; j++)
-            if (table[j] & PAGE_PRESENT)
+            if (table[j] & PAGE_PRESENT) {
+                memset((void *)(table[j] & ~0xFFFu), 0, PAGE_SIZE);   /* identity-map: fizik = virtual */
                 pmm_free_frame(table[j] & ~0xFFFu);
+            }
         pmm_free_frame((uint32_t)table);
     }
     pmm_free_frame((uint32_t)dir);
@@ -243,6 +260,27 @@ bool paging_check_range(uint32_t *dir, uint32_t virt, uint32_t len, uint32_t nee
             break;
     }
     return true;
+}
+
+/*
+ * v0.9: qurilmaning fizik registrlar manzilini (masalan, AHCI kontrolleri —
+ * 0xFEBF1000) kernelning virtual xotirasiga ulash. Kesh o'chiriladi: protsessor
+ * registr qiymatini eslab qolmasligi, har safar qurilmaning o'zidan o'qishi kerak.
+ * Faqat yuklanishda chaqiriladi (oddiy "ko'tariluvchi" ajratuvchi, qaytarilmaydi).
+ */
+void *paging_map_mmio(uint32_t phys, uint32_t size)
+{
+    static uint32_t next = MMIO_VIRT;
+    uint32_t base = phys & ~(PAGE_SIZE - 1), extra = phys - base;
+    uint32_t pages = (size + extra + PAGE_SIZE - 1) / PAGE_SIZE;
+    if (next + pages * PAGE_SIZE > MMIO_VIRT + MMIO_SIZE)
+        return 0;
+    uint32_t virt = next;
+    for (uint32_t i = 0; i < pages; i++)
+        if (!paging_map(virt + i * PAGE_SIZE, base + i * PAGE_SIZE, PAGE_RW | PAGE_PCD))
+            return 0;
+    next += pages * PAGE_SIZE;
+    return (void *)(virt + extra);
 }
 
 uint32_t paging_identity_limit(void)

@@ -73,6 +73,9 @@ void rootfs_init(void)
                "v0.6.1 mustahkamlash: panic, jurnal, FPU, himoyalar [tayyor]\n"
                "v0.7  grafika: oynalar, sichqoncha, dasturlar      [tayyor]\n"
                "v0.8  sinxronizatsiya: mutex, semafor, pipe        [tayyor]\n"
+               "v0.9  haqiqiy kompyuter: UEFI, grafik konsol, SATA [tayyor]\n"
+               "v0.10 fork + copy-on-write, exec, jarayon fd lari\n"
+               "v0.11 testlar, o'lchovlar, scheduler tadqiqoti\n"
                "v1.0  diplom ishi\n");
 
     vfs_chdir("/home/diyorbek");

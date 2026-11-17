@@ -636,6 +636,7 @@ static const command_t commands[] = {
 
     { "gui",       CAT_SYSTEM,  "Grafik rejim: oynalar, sichqoncha, dasturlar",    cmd_gui       },
     { "mouse",     CAT_SYSTEM,  "Sichqoncha tezligi: mouse <1-10>",                cmd_mouse     },
+    { "hw",        CAT_SYSTEM,  "Kompyuter haqida hisobot (protsessor, ekran, disk)", cmd_hw   },
     { "pci",       CAT_SYSTEM,  "PCI qurilmalari ro'yxati",                        cmd_pci       },
     { "dmesg",     CAT_SYSTEM,  "Kernel jurnali (yuklanishdan beri xabarlar)",     cmd_dmesg     },
     { "crash",     CAT_SYSTEM,  "Panic sinovi: crash | stack | canary | heap",    cmd_crash     },

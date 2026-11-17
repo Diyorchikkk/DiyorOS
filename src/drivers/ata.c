@@ -148,6 +148,7 @@ bool ata_init(void)
     ata_string(info.model, id + 27, 20);
     info.sectors = id[60] | ((uint32_t)id[61] << 16);   /* LBA28 sektorlar soni */
     info.present = info.sectors > 0;
+    info.driver = "ATA (IDE, PIO)";
     return info.present;
 }
 

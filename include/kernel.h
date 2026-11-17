@@ -26,4 +26,6 @@ void status_bar_refresh(void);
 #define STATUS_TASK_COL 16
 #define STATUS_TASK_END 29
 
+const char *boot_loader_name(void);    /* v0.9: masalan "GRUB 2.12" */
+
 #endif

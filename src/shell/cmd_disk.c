@@ -10,7 +10,7 @@
 #include <stdbool.h>
 #include "shell.h"
 #include "vfs.h"
-#include "ata.h"
+#include "disk.h"
 #include "kprintf.h"
 #include "vga.h"
 #include "drivers.h"
@@ -50,15 +50,16 @@ static void ask(char *buf, int max)
 void cmd_disk(const char *args)
 {
     (void)args;
-    const ata_info_t *ai = ata_info();
+    const disk_info_t *ai = disk_info();
     if (!ai->present) {
         red("Disk topilmadi. QEMU ni 'make run' bilan ishga tushiring (disk.img ulanadi).\n");
         return;
     }
-    kprintf("Qurilma:        ATA (IDE), birlamchi kanal, master\n");
+    kprintf("Drayver:        %s\n", ai->driver);
     kprintf("Model:          %s\n", ai->model);
     kprintf("Hajmi:          %u sektor x 512 bayt = %u MB\n", ai->sectors, ai->sectors / 2048);
-    kprintf("Statistika:     %u sektor o'qildi, %u sektor yozildi\n", ai->reads, ai->writes);
+    kprintf("Statistika:     %u sektor o'qildi, %u sektor yozildi, %u xato\n",
+            ai->reads, ai->writes, ai->errors);
 
     fat32_stats_t st;
     fat32_stats(&st);
@@ -81,13 +82,25 @@ void cmd_mkfs(const char *args)
     while (*args == ' ')
         args++;
     const char *label = *args ? args : "DIYOROS";
-    if (!ata_info()->present) {
+    if (!disk_info()->present) {
         red("mkfs: disk topilmadi\n");
         return;
     }
 
+    const char *danger = fat32_foreign_disk();
+    if (danger) {
+        red("mkfs: rad etildi - ");
+        red(danger);
+        red(".\n");
+        kprintf("Disk: %s, %u MB. Bu boshqa operatsion tizimning diski bo'lishi mumkin -\n"
+                "DiyorOS uni o'chirmaydi. Faqat bo'sh yoki DiyorOS formatlagan disk formatlanadi.\n",
+                disk_info()->model, disk_info()->sectors / 2048);
+        return;
+    }
+
     vga_set_color(VGA_YELLOW, VGA_BLACK);
-    kprintf("DIQQAT: diskdagi BARCHA ma'lumotlar o'chadi (%u MB).\n", ata_info()->sectors / 2048);
+    kprintf("DIQQAT: diskdagi BARCHA ma'lumotlar o'chadi (%s, %u MB).\n",
+            disk_info()->model, disk_info()->sectors / 2048);
     vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
     kprintf("Davom etish uchun 'ha' deb yozing: ");
     char answer[8];

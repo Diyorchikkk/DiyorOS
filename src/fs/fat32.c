@@ -44,7 +44,7 @@
  *   - Bo'sh klasterlar soni bir marta sanaladi va keyin hisoblab boriladi.
  */
 #include "vfs.h"
-#include "ata.h"
+#include "disk.h"
 #include "memory.h"
 #include "string.h"
 #include "irq.h"
@@ -168,7 +168,7 @@ static bool cache_load(uint32_t sector)
 {
     if (fs.cache_valid && fs.cache_sector == sector)
         return true;
-    if (!ata_read(fs.fat_lba + sector, 1, fs.cache))
+    if (!disk_read(fs.fat_lba + sector, 1, fs.cache))
         return false;
     fs.cache_sector = sector;
     fs.cache_valid = true;
@@ -191,7 +191,7 @@ static bool fat_set(uint32_t c, uint32_t value)
     uint32_t *e = (uint32_t *)(fs.cache + (c * 4) % SECTOR_SIZE);
     *e = (*e & ~FAT_MASK) | (value & FAT_MASK);       /* yuqori 4 bit saqlanadi */
     for (uint32_t i = 0; i < fs.fat_count; i++)        /* barcha FAT nusxalariga */
-        if (!ata_write(fs.fat_lba + i * fs.fat_size + sector, 1, fs.cache))
+        if (!disk_write(fs.fat_lba + i * fs.fat_size + sector, 1, fs.cache))
             return false;
     return true;
 }
@@ -201,7 +201,7 @@ static bool zero_cluster(uint32_t c)
     uint8_t zero[SECTOR_SIZE];
     memset(zero, 0, sizeof(zero));
     for (uint32_t i = 0; i < fs.spc; i++)
-        if (!ata_write(cluster_lba(c) + i, 1, zero))
+        if (!disk_write(cluster_lba(c) + i, 1, zero))
             return false;
     return true;
 }
@@ -217,13 +217,13 @@ static bool zero_cluster(uint32_t c)
 static void fsinfo_write(uint32_t free_count, uint32_t next_free)
 {
     uint8_t sec[SECTOR_SIZE];
-    if (!fs.fsinfo_lba || !ata_read(fs.fsinfo_lba, 1, sec))
+    if (!fs.fsinfo_lba || !disk_read(fs.fsinfo_lba, 1, sec))
         return;
     if (*(uint32_t *)(sec + 0) != 0x41615252 || *(uint32_t *)(sec + 484) != 0x61417272)
         return;                                /* FSInfo emas — tegmaymiz */
     *(uint32_t *)(sec + 488) = free_count;
     *(uint32_t *)(sec + 492) = next_free;
-    ata_write(fs.fsinfo_lba, 1, sec);
+    disk_write(fs.fsinfo_lba, 1, sec);
 }
 
 static void fsinfo_invalidate(void)
@@ -389,14 +389,14 @@ static bool dirent_io(uint32_t dir_cluster, uint32_t index, void *ent, bool writ
     uint32_t byte = (index % per_cluster) * 32;
     uint32_t lba = cluster_lba(c) + byte / SECTOR_SIZE;
     uint8_t sec[SECTOR_SIZE];
-    if (!ata_read(lba, 1, sec))
+    if (!disk_read(lba, 1, sec))
         return false;
     if (!write) {
         memcpy(ent, sec + byte % SECTOR_SIZE, 32);
         return true;
     }
     memcpy(sec + byte % SECTOR_SIZE, ent, 32);
-    return ata_write(lba, 1, sec);
+    return disk_write(lba, 1, sec);
 }
 
 static uint8_t lfn_checksum(const char *short_name)
@@ -623,7 +623,7 @@ static int load_dir(vfs_node_t *dir)
             slow = fat_get(slow);              /* slow = zanjirning (steps / 2)-klasteri */
         bool cycle = steps > 0 && c == slow;
         if (cycle || ++steps > DIR_MAX_BYTES / fs.cluster_bytes ||
-            !ata_read(cluster_lba(c), fs.spc, buf)) {
+            !disk_read(cluster_lba(c), fs.spc, buf)) {
             kfree(buf);                        /* aylana zanjir, juda katta papka yoki disk xatosi */
             free_tree(dir);                    /* yarim o'qilgan ro'yxat qolmasin */
             if (cycle)
@@ -746,7 +746,7 @@ static int find_free_slots(vfs_node_t *dir, uint32_t count, uint32_t *start)
             index += per_cluster;
             continue;
         }
-        if (!ata_read(cluster_lba(c), fs.spc, buf)) {
+        if (!disk_read(cluster_lba(c), fs.spc, buf)) {
             kfree(buf);
             return VFS_EIO;
         }
@@ -857,7 +857,7 @@ static int32_t do_read(vfs_node_t *n, uint32_t off, uint32_t len, uint8_t *buf)
         uint32_t chunk = fs.cluster_bytes - in;
         if (chunk > len - done)
             chunk = len - done;
-        if (!ata_read(cluster_lba(c), fs.spc, cbuf)) {
+        if (!disk_read(cluster_lba(c), fs.spc, cbuf)) {
             kfree(cbuf);
             return VFS_EIO;
         }
@@ -893,12 +893,12 @@ static int32_t do_write(vfs_node_t *n, uint32_t off, uint32_t len, const uint8_t
         uint32_t chunk = fs.cluster_bytes - in;
         if (chunk > len - done)
             chunk = len - done;
-        if (chunk < fs.cluster_bytes && !ata_read(cluster_lba(c), fs.spc, cbuf)) {
+        if (chunk < fs.cluster_bytes && !disk_read(cluster_lba(c), fs.spc, cbuf)) {
             err = VFS_EIO;
             break;
         }
         memcpy(cbuf + in, buf + done, chunk);
-        if (!ata_write(cluster_lba(c), fs.spc, cbuf)) {
+        if (!disk_write(cluster_lba(c), fs.spc, cbuf)) {
             err = VFS_EIO;
             break;
         }
@@ -1133,13 +1133,13 @@ int fat32_mount(vfs_node_t **out)
 
 static int mount_locked(vfs_node_t **out)
 {
-    if (!ata_info()->present)
+    if (!disk_info()->present)
         return VFS_ENOENT;
     if (fs.mounted)
         return VFS_EBUSY;
 
     uint8_t sec[SECTOR_SIZE];
-    if (!ata_read(0, 1, sec))
+    if (!disk_read(0, 1, sec))
         return VFS_EIO;
     if (sec[510] != 0x55 || sec[511] != 0xAA)
         return VFS_EINVAL;                     /* formatlanmagan */
@@ -1154,7 +1154,7 @@ static int mount_locked(vfs_node_t **out)
                 break;
             }
         }
-        if (!part || !ata_read(part, 1, sec))
+        if (!part || !disk_read(part, 1, sec))
             return VFS_EINVAL;
     }
 
@@ -1172,7 +1172,7 @@ static int mount_locked(vfs_node_t **out)
      */
     uint32_t total     = b->total32 ? b->total32 : b->total16;
     uint64_t meta      = (uint64_t)b->reserved_sectors + (uint64_t)b->fat_count * b->fat_size32;
-    uint32_t disk_size = ata_info()->sectors;
+    uint32_t disk_size = disk_info()->sectors;
     if (b->reserved_sectors == 0 || b->fat_count > 4 || total == 0 ||
         part >= disk_size || total > disk_size - part || meta >= total)
         return VFS_EINVAL;
@@ -1252,9 +1252,49 @@ void fat32_stats(fat32_stats_t *st)
  * fleshkalardagi kabi). Klaster = 1 sektor (512 bayt): FAT32 uchun kamida
  * 65525 klaster kerak, ya'ni disk kamida ~33 MB bo'lishi kerak.
  */
+/*
+ * v0.9: XAVFSIZLIK. Haqiqiy kompyuterda DiyorOS ko'radigan disk — odatda uning
+ * ICHKI diski (Windows / macOS / Linux o'rnatilgan). mkfs uni butunlay o'chiradi.
+ * Shuning uchun faqat ikki holatda ruxsat beramiz:
+ *   - disk bo'sh (0-sektor butunlay nol) — masalan, QEMU dagi yangi disk.img;
+ *   - disk allaqachon butunligicha FAT32 (DiyorOS o'zi formatlagan).
+ * Bo'limlar jadvali (MBR/GPT) yoki boshqa fayl tizimi bo'lsa — rad etiladi.
+ * Qaytaradi: 0 — xavfsiz, aks holda sababi.
+ */
+const char *fat32_foreign_disk(void)
+{
+    static uint8_t sec[SECTOR_SIZE];
+    if (!disk_read(0, 1, sec))
+        return "diskni o'qib bo'lmadi";
+    bool zero = true;
+    for (int i = 0; i < SECTOR_SIZE; i++)
+        if (sec[i])
+            zero = false;
+    if (zero)
+        return 0;                                   /* bo'sh disk */
+    bool boot_sig = sec[510] == 0x55 && sec[511] == 0xAA;
+    bool fat_boot = (sec[0] == 0xEB || sec[0] == 0xE9) && memcmp(sec + 82, "FAT32", 5) == 0;
+    if (boot_sig && fat_boot)
+        return 0;                                   /* butun disk FAT32 (bo'limlarsiz) */
+    if (memcmp(sec + 3, "NTFS", 4) == 0)
+        return "diskda NTFS fayl tizimi bor (Windows)";
+    if (memcmp(sec + 3, "EXFAT", 5) == 0)
+        return "diskda exFAT fayl tizimi bor";
+    if (boot_sig) {
+        for (int i = 0; i < 4; i++) {
+            uint8_t type = sec[446 + i * 16 + 4];
+            if (type == 0xEE)
+                return "diskda GPT bo'limlar jadvali bor (zamonaviy OS diski)";
+            if (type)
+                return "diskda MBR bo'limlar jadvali bor (boshqa OS diski)";
+        }
+    }
+    return "diskda noma'lum ma'lumot bor";
+}
+
 int fat32_mkfs(const char *label)
 {
-    const ata_info_t *ai = ata_info();
+    const disk_info_t *ai = disk_info();
     if (!ai->present)
         return VFS_ENOENT;
     if (fs.mounted)
@@ -1310,7 +1350,7 @@ int fat32_mkfs(const char *label)
     memcpy(sec + 90, msg, strlen(msg));
     sec[510] = 0x55;
     sec[511] = 0xAA;
-    if (!ata_write(0, 1, sec) || !ata_write(6, 1, sec))
+    if (!disk_write(0, 1, sec) || !disk_write(6, 1, sec))
         err = VFS_EIO;
 
     /* 2. FSInfo: bo'sh klasterlar soni "noma'lum" (har bir tizim o'zi sanaydi) */
@@ -1320,7 +1360,7 @@ int fat32_mkfs(const char *label)
     *(uint32_t *)(sec + 488) = 0xFFFFFFFF;
     *(uint32_t *)(sec + 492) = 0xFFFFFFFF;
     *(uint32_t *)(sec + 508) = 0xAA550000;
-    if (!err && (!ata_write(1, 1, sec) || !ata_write(7, 1, sec)))
+    if (!err && (!disk_write(1, 1, sec) || !disk_write(7, 1, sec)))
         err = VFS_EIO;
 
     /* 3. Qolgan zaxira sektorlar va ikkala FAT ni tozalash */
@@ -1330,11 +1370,11 @@ int fat32_mkfs(const char *label)
     if (!err) {
         memset(zero, 0, SECTOR_SIZE * 64);
         for (uint32_t s = 2; s < reserved && !err; s++)
-            if (s != 6 && s != 7 && !ata_write(s, 1, zero))
+            if (s != 6 && s != 7 && !disk_write(s, 1, zero))
                 err = VFS_EIO;
         for (uint32_t s = 0; s < fats * fat_size && !err; s += 64) {
             uint32_t n = fats * fat_size - s < 64 ? fats * fat_size - s : 64;
-            if (!ata_write(reserved + s, n, zero))
+            if (!disk_write(reserved + s, n, zero))
                 err = VFS_EIO;
         }
     }
@@ -1346,7 +1386,7 @@ int fat32_mkfs(const char *label)
         ((uint32_t *)sec)[1] = 0x0FFFFFFF;
         ((uint32_t *)sec)[2] = 0x0FFFFFFF;
         for (uint32_t i = 0; i < fats && !err; i++)
-            if (!ata_write(reserved + i * fat_size, 1, sec))
+            if (!disk_write(reserved + i * fat_size, 1, sec))
                 err = VFS_EIO;
     }
 
@@ -1354,7 +1394,7 @@ int fat32_mkfs(const char *label)
     uint32_t data_lba = reserved + fats * fat_size;
     if (!err) {
         for (uint32_t i = 0; i < spc && !err; i++)
-            if (!ata_write(data_lba + i, 1, zero))
+            if (!disk_write(data_lba + i, 1, zero))
                 err = VFS_EIO;
         fat_dirent_t *v = (fat_dirent_t *)sec;
         memset(sec, 0, sizeof(sec));
@@ -1363,7 +1403,7 @@ int fat32_mkfs(const char *label)
         uint32_t now = fat_now();
         v->mdate = (uint16_t)(now >> 16);
         v->mtime = (uint16_t)now;
-        if (!err && !ata_write(data_lba, 1, sec))
+        if (!err && !disk_write(data_lba, 1, sec))
             err = VFS_EIO;
     }
 

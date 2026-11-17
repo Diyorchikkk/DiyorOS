@@ -178,6 +178,7 @@ typedef struct {
 } fat32_stats_t;
 int         fat32_mount(vfs_node_t **out);           /* diskni o'qib, ildiz tugunini beradi */
 int         fat32_mkfs(const char *label);           /* diskni FAT32 da formatlash */
+const char *fat32_foreign_disk(void);                /* v0.9: boshqa OS diski bo'lsa — sababi, aks holda 0 */
 void        fat32_stats(fat32_stats_t *st);
 
 #endif

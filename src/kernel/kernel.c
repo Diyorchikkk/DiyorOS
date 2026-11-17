@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include "config.h"
 #include "multiboot.h"
+#include "fbcon.h"
 #include "kernel.h"
 #include "vga.h"
 #include "kprintf.h"
@@ -23,9 +24,10 @@
 #include "memory.h"
 #include "task.h"
 #include "vfs.h"
-#include "ata.h"
+#include "disk.h"
 #include "klog.h"
 #include "pci.h"
+#include "string.h"
 #include "fb.h"
 #include <stdarg.h>
 #include <stdbool.h>
@@ -122,9 +124,23 @@ static void print_banner(void)
     kprintf("  %s v%s  |  %s\n\n", OS_NAME, OS_VERSION, OS_ARCH);
 }
 
+static char loader[32];          /* bootloader nomi ("GRUB 2.12") — hw buyrug'i uchun */
+
+const char *boot_loader_name(void)
+{
+    return loader[0] ? loader : "Multiboot";
+}
+
 void kernel_main(uint32_t magic, multiboot_info_t *mbi)
 {
     serial_init();               /* eng birinchi: keyingi har bir xabar serial portga ham chiqadi */
+
+    /* v0.9: bootloader grafik ekran bergan bo'lsa (UEFI, yoki GRUB grafik rejimi) —
+       matnni o'zimiz chizamiz. Bu vga_init DAN OLDIN: konsol boshidanoq xotirada */
+    bool graphic_console = magic == MULTIBOOT_BOOTLOADER_MAGIC && fbcon_early(mbi);
+    if (magic == MULTIBOOT_BOOTLOADER_MAGIC && (mbi->flags & MULTIBOOT_FLAG_LOADER) && mbi->boot_loader_name)
+        strncpy(loader, (const char *)mbi->boot_loader_name, sizeof(loader) - 1);
+
     vga_init();
     status_bar_update(0);
 
@@ -138,8 +154,13 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
         mem_lower_kb = mbi->mem_lower;
         mem_upper_kb = mbi->mem_upper;
     }
-    boot_msg(true, "Multiboot bootloader aniqlandi%s",
+    boot_msg(true, "Bootloader: %s%s", loader[0] ? loader : "Multiboot",
              serial_present() ? ", serial konsol (COM1) ulandi" : "");
+    if (graphic_console) {
+        char d[48];
+        fbcon_describe(d, sizeof(d));
+        boot_msg(true, "Ekran: bootloader bergan framebuffer, %s (matn konsoli grafikada)", d);
+    }
 
     gdt_init();
     boot_msg(true, "GDT (ring 0 / ring 3 segmentlari) va TSS o'rnatildi");
@@ -149,10 +170,15 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
 
     /* Xotira: IDT dan keyin, chunki paging xatolari (Page Fault) ushlanishi kerak */
     pmm_init(mbi);
-    boot_msg(true, "Fizik xotira menejeri: %u MB, %u ta frame (4 KB)",
-             pmm_memory_top() / (1024 * 1024), pmm_total_frames());
+    if (pmm_ram_total_mb() > pmm_memory_top() / (1024 * 1024) + 64)
+        boot_msg(true, "Fizik xotira: %u MB dan %u MB ishlatiladi (32 bitli kernel chegarasi)",
+                 pmm_ram_total_mb(), pmm_memory_top() / (1024 * 1024));
+    else
+        boot_msg(true, "Fizik xotira menejeri: %u MB, %u ta frame (4 KB)",
+                 pmm_memory_top() / (1024 * 1024), pmm_total_frames());
 
     paging_init();
+    fbcon_after_paging();        /* framebuffer ni yangi manzil xaritasiga ulash — darhol */
     boot_msg(true, "Paging yoqildi; kernel kodi faqat o'qish uchun (%u KB)",
              (uint32_t)(kernel_data_start - kernel_start) / 1024);
 
@@ -163,15 +189,19 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
 
     pci_init();
     boot_msg(true, "PCI shinasi: %d ta qurilma topildi", pci_count());
-    if (fb_detect())
+    if (fb_detect() && fb_info()->boot)
+        boot_msg(fb_info()->available, fb_info()->available ? "Grafik interfeys: bootloader ekranida (gui)"
+                                                             : "Grafik interfeys: ekran formati mos emas (faqat matn)");
+    else if (fb_info()->available)
         boot_msg(true, "Videokarta: Bochs VBE, %u MB xotira (grafik rejim: gui)",
                  fb_info()->vram_bytes / (1024 * 1024));
     else
         boot_msg(false, "Grafik adapter topilmadi (faqat matn rejimi)");
 
-    bool have_disk = ata_init();
+    bool have_disk = disk_init();
     if (have_disk)
-        boot_msg(true, "ATA disk: %s, %u MB", ata_info()->model, ata_info()->sectors / 2048);
+        boot_msg(true, "Disk: %s, %u MB (%s)", disk_info()->model, disk_info()->sectors / 2048,
+                 disk_info()->driver);
 
     rootfs_init();
     boot_msg(true, "Fayl tizimi: VFS, ramfs (/), procfs (/proc), dasturlar (/bin)");
@@ -183,6 +213,9 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
         fat32_stats(&st);
         boot_msg(true, "/disk: FAT32 \"%s\", %u MB bo'sh", st.label,
                  st.free_clusters / (1024 * 1024 / st.cluster_bytes));
+    } else if (fat32_foreign_disk()) {
+        /* Haqiqiy kompyuterning ichki diski: DiyorOS unga tegmaydi */
+        boot_msg(false, "Disk boshqa OS ga tegishli - ulanmadi, fayllar xotirada saqlanadi");
     } else {
         boot_msg(false, "Disk FAT32 da formatlanmagan. Formatlash: mkfs");
     }
@@ -191,18 +224,22 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
     timer_on_second(status_bar_update);
     boot_msg(true, "PIT taymer ishga tushdi (%u Hz)", TIMER_HZ);
 
-    keyboard_init();
-    boot_msg(true, "PS/2 klaviatura drayveri ulandi");
-
-    if (mouse_init())
-        boot_msg(true, "PS/2 sichqoncha (g'ildirak bilan) ulandi");
+    if (keyboard_init())
+        boot_msg(true, "PS/2 klaviatura drayveri ulandi");
     else
+        boot_msg(false, "PS/2 kontrolleri yo'q: USB klaviatura uchun BIOS da \"USB Legacy\" ni yoqing");
+
+    int mouse = mouse_init();
+    if (mouse > 0)
+        boot_msg(true, "PS/2 sichqoncha (g'ildirak bilan) ulandi");
+    else if (mouse == 0)
         boot_msg(true, "PS/2 sichqoncha ulandi (g'ildiraksiz)");
 
     __asm__ volatile ("sti");    /* uzilishlarni yoqamiz — endi IRQ lar keladi */
     boot_msg(true, "Uzilishlar yoqildi");
 
     sched_init();                /* shu oqim "shell" vazifasiga aylanadi, idle yaratiladi */
+    fbcon_start();               /* grafik konsol: ekranni chizuvchi oqim */
     boot_msg(true, "Scheduler ishga tushdi (Round-Robin, kvant %u ms)",
              SCHED_QUANTUM * 1000 / TIMER_HZ);
     boot_msg(true, "Sinxronizatsiya: mutex, semafor, kanallar (pipe); kernel preemptive");

@@ -28,6 +28,7 @@
 #include "task.h"
 #include "drivers.h"
 #include "fb.h"
+#include "fbcon.h"
 
 static bool in_panic = false;
 
@@ -93,6 +94,7 @@ static void __attribute__((noreturn)) panic_footer(void)
         kprintf("  Vazifa: PID %u (%s)   Ishlash vaqti: %u s\n", t->pid, t->name, timer_seconds());
     }
     kprintf("  Tizim to'xtatildi. Qayta yoqing.\n");
+    fbcon_panic();                          /* v0.9: grafik konsolda — xabarni hozir chizamiz */
     halt_forever();
 }
 

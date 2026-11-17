@@ -68,7 +68,11 @@ void cmd_mem(const char *args)
     heap_get_stats(&hs);
 
     title("Fizik xotira (PMM)");
-    kprintf("  RAM hajmi:        %u MB\n", pmm_memory_top() / (1024 * 1024));
+    if (pmm_ram_total_mb() > pmm_memory_top() / (1024 * 1024) + 64)
+        kprintf("  RAM hajmi:        %u MB (ishlatiladi: %u MB - 32 bit chegarasi)\n",
+                pmm_ram_total_mb(), pmm_memory_top() / (1024 * 1024));
+    else
+        kprintf("  RAM hajmi:        %u MB\n", pmm_memory_top() / (1024 * 1024));
     kprintf("  Frame lar (4 KB): jami %u, band %u, bo'sh %u\n", total, used, total - used);
     kprintf("  Bo'sh xotira:     %u KB\n", (total - used) * 4);
     kprintf("  Kernel:           0x%x - 0x%x (%u KB)\n",

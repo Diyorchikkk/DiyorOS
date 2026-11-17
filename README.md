@@ -1,4 +1,4 @@
-# DiyorOS v0.8
+# DiyorOS v0.9
 
 C va Assembly'da noldan yozilgan operatsion tizim. Arxitektura: x86, 32-bit protected mode.
 Linux, Windows yoki boshqa OS kodidan foydalanilmagan: kompyuter yoqilgandan keyin ekranga chiqadigan
@@ -8,19 +8,20 @@ hamma narsani shu kod boshqaradi.
 
 Nimalari bor:
 
-- **Yuklanish**: Multiboot (QEMU `-kernel` yoki GRUB ISO), GDT, IDT, PIC, TSS
+- **Yuklanish**: Multiboot (QEMU `-kernel` yoki GRUB ISO), **BIOS va UEFI** (v0.9), GDT, IDT, PIC, TSS
 - **Xotira**: fizik xotira menejeri (bitmap), paging, har bir jarayonga alohida manzil maydoni, kernel heap
 - **Jarayonlar**: preemptive Round-Robin scheduler, kernel oqimlari, ring 3 dagi dasturlar (ELF), syscall'lar,
   dasturdan dastur ishga tushirish (`spawn`/`wait`), signal (Ctrl+C butun jarayon guruhiga)
 - **Sinxronizatsiya va IPC** (v0.8): mutex (deadlock aniqlash bilan), semafor, kutish navbatlari, kanallar
   (`ls | grep o | wc`), `>` `>>` `<` yo'naltirish; syscall'lar ichida ham uzilishlar yoqiq (preemptive kernel)
 - **Fayl tizimlari**: VFS, ramfs, procfs (`/proc`), FAT32 (diskda, uzun nomlar bilan)
-- **Drayverlar**: VGA matn rejimi, PS/2 klaviatura va sichqoncha, PIT taymer, CMOS soati, ATA disk, serial port
+- **Drayverlar**: VGA matn rejimi va **grafik konsol** (UEFI framebuffer, v0.9), PS/2 klaviatura va sichqoncha,
+  PIT taymer, CMOS soati, ATA (IDE) va **AHCI (SATA, DMA)** disklar, serial port
 - **Ishonchlilik**: kernel panic (backtrace bilan), kernel jurnali (`dmesg`), stek va heap qo'riqchilari,
   faqat o'qiladigan kernel kodi, Double Fault uchun alohida stek, FPU kontekstini saqlash
 - **Grafik interfeys** (v0.7): 1024x768, oyna menejeri va kompozitor, sichqoncha, vazifalar paneli,
   Start menyusi; Terminal, Fayllar, Tizim monitori, Chizish; ring 3 dagi grafik dasturlar (Mandelbrot, Ilon)
-- **Shell**: 48 ta buyruq, qator tahriri, tarix, Tab bilan to'ldirish, matn muharriri
+- **Shell**: 49 ta buyruq, qator tahriri, tarix, Tab bilan to'ldirish, matn muharriri
 
 ---
 
@@ -52,6 +53,8 @@ Shundan keyin `/disk` dagi fayllar o'chirib-yoqqandan keyin ham saqlanadi.
 | `make run` | QEMU'da ishga tushirish |
 | `make debug` | QEMU'ni GDB kutish rejimida ishga tushirish (`i686-elf-gdb build/diyoros.bin -ex "target remote :1234"`) |
 | `make iso` | GRUB orqali yuklanadigan `build/diyoros.iso` (UTM yoki haqiqiy kompyuter uchun) |
+| `make run-ahci` | v0.9: zamonaviy mashina (Q35) — disk SATA (AHCI) kontrollerida |
+| `make run-uefi` | v0.9: UEFI + Q35 + tayyor `diyoros.iso` (BIOS + UEFI) |
 | `make newdisk` | yangi bo'sh `disk.img` |
 | `make clean` | `build/` ni tozalash (`disk.img` saqlanadi) |
 
@@ -88,6 +91,7 @@ qaytarish: **Ctrl + Option + G**.
 | `gui` | **Grafik rejim**: oynalar, sichqoncha, dasturlar — batafsil: [docs/v0.7-grafika.md](docs/v0.7-grafika.md) |
 | `ls /bin \| grep o \| wc`, `sanoq 100 > /disk/son.txt`, `ota` | **Kanallar, yo'naltirish, spawn/wait** |
 | `sinx poyga`, `sinx ishlab`, `sinx deadlock`, `sinx faylasuflar` | **Sinxronizatsiya**: race condition, producer-consumer, deadlock — batafsil: [docs/v0.8-sinxronizatsiya.md](docs/v0.8-sinxronizatsiya.md) |
+| `hw` | Kompyuter haqida hisobot: protsessor, ekran (VGA yoki UEFI framebuffer), disk drayveri — [docs/v0.9-haqiqiy-kompyuter.md](docs/v0.9-haqiqiy-kompyuter.md) |
 
 Har bir bosqichning batafsil demo ketma-ketligi va himoya savollari `docs/` papkasida.
 
@@ -126,11 +130,14 @@ DiyorOS/
 │   │   ├── vga.c         ekran (0xB8000), scrollback, kursor
 │   │   ├── serial.c      serial port COM1 — konsol nusxasi (v0.6.1)
 │   │   ├── pci.c         PCI shinasi: qurilmalarni topish (v0.7)
-│   │   ├── fb.c          grafik rejim (Bochs VBE), matn rejimiga qaytish (v0.7)
+│   │   ├── fb.c          grafik rejim (Bochs VBE yoki bootloader framebuffer)
+│   │   ├── fbcon.c       grafik konsol: 80x25 matnni piksellarga chizish (UEFI, v0.9)
 │   │   ├── timer.c       PIT taymer, IRQ0
 │   │   ├── keyboard.c    PS/2 klaviatura, IRQ1, ring buffer
 │   │   ├── mouse.c       PS/2 sichqoncha: harakat, tugmalar, g'ildirak, IRQ12
 │   │   ├── ata.c         ATA (IDE) qattiq disk, PIO
+│   │   ├── ahci.c        AHCI (SATA) disk, DMA (v0.9)
+│   │   ├── disk.c        blok qurilma qatlami: AHCI yoki ATA ni tanlaydi (v0.9)
 │   │   └── rtc.c         CMOS real vaqt soati
 │   ├── mm/
 │   │   ├── pmm.c         fizik xotira menejeri (bitmap)
@@ -165,6 +172,7 @@ DiyorOS/
 │       ├── cmd_fs.c      ls, cd, cat, cp, mv, rm, tree...
 │       ├── cmd_disk.c    disk, mkfs, mount, umount
 │       ├── cmd_sync.c    sinx: poyga, ishlab chiqaruvchi-iste'molchi, deadlock, faylasuflar (v0.8)
+│       ├── cmd_hw.c      hw: kompyuter haqida hisobot (v0.9)
 │       └── editor.c      matn muharriri (edit)
 └── user/                 dasturlar — ring 3 da ishlaydi, /bin ga tushadi
     ├── crt0.s            dastur boshlanishi: main(argc, argv)
@@ -218,7 +226,7 @@ protsessor boshqa vazifalarga beriladi.
   o'ldiriladi ("Segmentation fault"). Kernelning o'zi xato qilsa — *kernel panic*: tizim to'xtaydi,
   chunki buzilgan kernel bilan davom etish ma'lumotlarni yo'qotishi mumkin.
 
-Har bir bosqichga oid savollar: `docs/v0.2-xotira.md` ... `docs/v0.8-sinxronizatsiya.md`.
+Har bir bosqichga oid savollar: `docs/v0.2-xotira.md` ... `docs/v0.9-haqiqiy-kompyuter.md`.
 Ustozga ko'rsatish uchun qisqa reja va eng ehtimoliy savollar: [docs/ustozga-korsatish.md](docs/ustozga-korsatish.md).
 
 ---
@@ -236,7 +244,10 @@ Ustozga ko'rsatish uchun qisqa reja va eng ehtimoliy savollar: [docs/ustozga-kor
 | **v0.6.1** ✅ | Kod tekshiruvi: 20+ xato tuzatildi; panic, jurnal, serial, FPU, himoyalar — [batafsil](docs/v0.6.1-mustahkamlash.md) | Ishonchlilik, race condition |
 | **v0.7** ✅ | Grafik rejim, PCI, oyna menejeri, sichqoncha, 7 ta grafik dastur, oyna syscall lari — [batafsil](docs/v0.7-grafika.md) | Grafik quyi tizim, I/O |
 | **v0.8** ✅ | Mutex, semafor, deadlock aniqlash, kanallar, yo'naltirish, `spawn`/`wait`, signallar, preemptive kernel — [batafsil](docs/v0.8-sinxronizatsiya.md) | Sinxronizatsiya, IPC |
-| v1.0 | Haqiqiy kompyuterda yuklash, testlar, diplom matni | — |
+| **v0.9** ✅ | UEFI, grafik konsol, AHCI (SATA, DMA), ichki diskni himoyalash, `hw` — [batafsil](docs/v0.9-haqiqiy-kompyuter.md) | Kiritish-chiqarish, yuklanish |
+| v0.10 | `fork` + copy-on-write, `exec`, har jarayonning o'z fd jadvali | Jarayonlar, xotira |
+| v0.11 | Avtomatik testlar, o'lchovlar, scheduler algoritmlarini taqqoslash | Tadqiqot |
+| v1.0 | Haqiqiy kompyuterda sinov natijalari, diplom matni, taqdimot | — |
 
 ---
 
@@ -245,7 +256,11 @@ Ustozga ko'rsatish uchun qisqa reja va eng ehtimoliy savollar: [docs/ustozga-kor
 `make iso` buyrug'i GRUB orqali yuklanadigan `build/diyoros.iso` faylini yaratadi (`grub-mkrescue`
 va `xorriso` kerak; Linux'da o'rnatish osonroq).
 
-- **UTM**: Emulate → Other, arxitektura x86_64, tizim *Standard PC (i440FX)*, 256 MB RAM, displey VGA,
-  IDE disk (CD dan yuqorida), CD sifatida `diyoros.iso`. Birinchi yuklanishda `mkfs`.
-- **Haqiqiy kompyuter**: ISO'ni USB'ga yozib, eski x86 noutbukda BIOS/Legacy rejimida yuklash mumkin.
+v0.9 dan boshlab ISO **BIOS va UEFI** da yuklanadi (Linux'da yig'ilgan tayyor `diyoros.iso` —
+loyiha ildizida). Batafsil, qadamma-qadam: [docs/v0.9-haqiqiy-kompyuter.md](docs/v0.9-haqiqiy-kompyuter.md).
+
+- **UTM**: Emulate → Other → ISO sifatida `diyoros.iso`, x86_64, 512 MB RAM, 1 GB disk; USB'ni
+  o'chiring (yoki "Force PS/2 controller"). Birinchi yuklanishda `mkfs`.
+- **Haqiqiy kompyuter**: ISO'ni balenaEtcher bilan USB'ga yozing; BIOS'da Secure Boot — o'chiq,
+  SATA — AHCI. Kompyuterning ichki diski **himoyalangan**: DiyorOS uni ulamaydi va formatlamaydi.
   Mac'ning o'zida yuklanmaydi (ARM protsessor).

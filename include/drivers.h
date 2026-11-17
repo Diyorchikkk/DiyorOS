@@ -3,6 +3,7 @@
 #define DRIVERS_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /* --- Taymer (PIT, IRQ0) --- */
 void     timer_init(uint32_t hz);
@@ -24,7 +25,8 @@ void     timer_on_second(void (*callback)(uint32_t seconds));
 #define KEY_END    0x1A /* Mac: Fn + o'ng strelka */
 #define KEY_ESC    0x1B
 #define KEY_DELETE 0x1C /* Mac: Fn + Backspace */
-void keyboard_init(void);
+bool keyboard_init(void);       /* false — PS/2 kontrolleri yo'q */
+bool ps2_present(void);
 char keyboard_getchar(void);   /* tugma bosilguncha kutadi */
 void keyboard_inject(char c);  /* boshqa drayver (sichqoncha) buferga belgi qo'shishi uchun */
 #define KEY_CTRL_C 0x03
@@ -33,7 +35,7 @@ void keyboard_inject(char c);  /* boshqa drayver (sichqoncha) buferga belgi qo's
 #define KEY_CTRL_U 0x1D
 
 /* --- Sichqoncha (PS/2, IRQ12) --- */
-int  mouse_init(void);         /* 1 — g'ildirakli sichqoncha topildi */
+int  mouse_init(void);         /* 1 — g'ildirakli, 0 — oddiy, -1 — PS/2 yo'q */
 /* v0.7: grafik rejimda har bir paket shu funksiyaga beriladi (uzilish ichida!).
    dx, dy — siljish (dy pastga musbat), dz — g'ildirak, buttons: bit0 chap, bit1 o'ng, bit2 o'rta */
 typedef void (*mouse_hook_t)(int dx, int dy, int dz, uint8_t buttons);

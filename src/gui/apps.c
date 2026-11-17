@@ -46,7 +46,8 @@ static void about_draw(window_t *w)
     gfx_text(s, 150, y, OS_AUTHOR, COL_TEXT, GFX_TRANSPARENT);
     gfx_text(s, 150, y + 22, OS_ARCH, COL_TEXT, GFX_TRANSPARENT);
     gfx_text(s, 150, y + 44, "C va GNU Assembly (kutubxonalarsiz)", COL_TEXT, GFX_TRANSPARENT);
-    ksnprintf(buf, sizeof(buf), "%ux%u, 32 bit rang (Bochs VBE)", fb_info()->width, fb_info()->height);
+    ksnprintf(buf, sizeof(buf), "%ux%u, 32 bit rang (%s)", fb_info()->width, fb_info()->height,
+              fb_info()->boot ? "bootloader ekrani" : "Bochs VBE");
     gfx_text(s, 150, y + 66, buf, COL_TEXT, GFX_TRANSPARENT);
     ksnprintf(buf, sizeof(buf), "%u MB RAM, %u MB bo'sh", pmm_total_frames() * 4 / 1024,
               (pmm_total_frames() - pmm_used_frames()) * 4 / 1024);

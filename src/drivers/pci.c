@@ -33,6 +33,22 @@ uint32_t pci_read32(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset)
     return inl(PCI_DATA);
 }
 
+void pci_write32(uint8_t bus, uint8_t slot, uint8_t func, uint8_t offset, uint32_t value)
+{
+    uint32_t address = 0x80000000u | ((uint32_t)bus << 16) | ((uint32_t)slot << 11) |
+                       ((uint32_t)func << 8) | (offset & 0xFC);
+    outl(PCI_ADDRESS, address);
+    outl(PCI_DATA, value);
+}
+
+/* Qurilmaga xotira manzillariga javob berish (bit 1) va o'zi xotiraga
+   murojaat qilish — DMA (bit 2, "bus master") ruxsatini berish (v0.9) */
+void pci_enable_dma(const pci_device_t *d)
+{
+    uint32_t cmd = pci_read32(d->bus, d->slot, d->func, 0x04);
+    pci_write32(d->bus, d->slot, d->func, 0x04, (cmd & 0xFFFF) | 0x06);
+}
+
 static void add_device(uint8_t bus, uint8_t slot, uint8_t func, uint32_t id)
 {
     if (device_count >= PCI_MAX_DEVICES)

@@ -42,6 +42,10 @@ void    vga_putc_local(char c);
 /* v0.7: grafik rejimda matn konsoli xotiradagi nusxaga yoziladi */
 void     vga_redirect(bool on);
 uint32_t vga_generation(void);
-void     vga_snapshot(uint16_t *cells, int *cursor_pos, bool *cursor_visible);   /* serial portga nusxalamasdan */
+void     vga_snapshot(uint16_t *cells, int *cursor_pos, bool *cursor_visible);
+/* v0.9: VGA matn rejimi yo'q (UEFI) — konsol xotirada, fbcon chizadi */
+void     vga_use_shadow(void);
+bool     vga_shadow_only(void);
+void     vga_set_flush_hook(void (*hook)(void));   /* serial portga nusxalamasdan */
 
 #endif

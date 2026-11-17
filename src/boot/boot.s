@@ -10,7 +10,8 @@
 # --- Multiboot header (bootloader bizni taniy olishi uchun) ---
 .set ALIGN,    1 << 0              # modullarni sahifa chegarasiga tekislash
 .set MEMINFO,  1 << 1              # bizga xotira hajmi haqida ma'lumot ber
-.set FLAGS,    ALIGN | MEMINFO
+.set VIDEO,    1 << 2              # v0.9: grafik rejimni bootloader yoqsin (pastda)
+.set FLAGS,    ALIGN | MEMINFO | VIDEO
 .set MAGIC,    0x1BADB002          # Multiboot standartidagi sehrli raqam
 .set CHECKSUM, -(MAGIC + FLAGS)    # MAGIC + FLAGS + CHECKSUM = 0 bo'lishi shart
 
@@ -19,6 +20,16 @@
 .long MAGIC
 .long FLAGS
 .long CHECKSUM
+# Manzil maydonlari (ishlatilmaydi — kernel ELF fayl, GRUB uni o'zi o'qiydi)
+.long 0, 0, 0, 0, 0
+# v0.9: so'ralgan ekran rejimi. UEFI kompyuterlarda VGA matn rejimi umuman yo'q,
+# shuning uchun GRUB grafik rejimni (UEFI GOP yoki BIOS VBE orqali) yoqib beradi,
+# kernel esa matnni o'zi chizadi (fbcon.c). BIOS li kompyuterlarda ham shu rejim:
+# grafik interfeys (gui) haqiqiy videokartada ishlashi uchun (QEMU "-kernel" e'tiborsiz qoldiradi).
+.long 0                            # 0 — chiziqli grafik rejim
+.long 1024                         # kenglik
+.long 768                          # balandlik
+.long 32                           # rang chuqurligi (bit)
 
 # --- Kernel steki (16 KB) ---
 # C funksiyalar ishlashi uchun stek kerak. Uni .bss bo'limida ajratamiz.

@@ -29,6 +29,7 @@ static uint32_t bitmap[MAX_FRAMES / 32];
 static uint32_t total_frames = 0;
 static uint32_t used_frames  = 0;
 static uint32_t memory_top   = 0;
+static uint32_t ram_total_mb = 0;                 /* v0.9: kompyuterdagi butun RAM (ishlatilmaydigani ham) */
 static uint32_t search_hint  = 0;                 /* qidiruvni shu joydan boshlaymiz */
 
 static mem_region_t regions[MAX_REGIONS];
@@ -79,6 +80,7 @@ void pmm_init(multiboot_info_t *mbi)
             }
 
             if (e->type == 1) {                    /* ishlatsa bo'ladigan RAM */
+                ram_total_mb += (uint32_t)(e->len >> 20);
                 free_range(e->addr, e->addr + e->len);
                 uint64_t top = e->addr + e->len;
                 if (top > MAX_MEMORY)
@@ -94,6 +96,7 @@ void pmm_init(multiboot_info_t *mbi)
         /* Xarita yo'q bo'lsa — 1 MB dan yuqoridagi xotirani ishlatamiz */
         memory_top = 0x100000 + mbi->mem_upper * 1024;
         free_range(0x100000, memory_top);
+        ram_total_mb = memory_top >> 20;
     }
 
     total_frames = memory_top / PAGE_SIZE;
@@ -151,4 +154,10 @@ int      pmm_region_count(void)  { return region_count; }
 const mem_region_t *pmm_region(int i)
 {
     return (i >= 0 && i < region_count) ? &regions[i] : 0;
+}
+
+/* Kompyuterdagi jami RAM (MB). 32 bitli kernel uning faqat 1 GB qismini ishlatadi */
+uint32_t pmm_ram_total_mb(void)
+{
+    return ram_total_mb;
 }

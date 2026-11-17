@@ -20,6 +20,9 @@ void cmd_spawn(const char *args);
 void cmd_kill(const char *args);
 void cmd_sched(const char *args);
 
+/* cmd_hw.c (v0.9) */
+void cmd_hw(const char *args);
+
 /* cmd_sync.c (v0.8) */
 void cmd_sinx(const char *args);
 

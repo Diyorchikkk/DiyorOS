@@ -124,6 +124,8 @@ void mouse_set_hook(mouse_hook_t h)
 
 int mouse_init(void)
 {
+    if (!ps2_present())
+        return -1;                       /* PS/2 kontrolleri yo'q */
     /* Ikkinchi PS/2 portini (sichqoncha) yoqish */
     wait_write();
     outb(PS2_COMMAND, 0xA8);
@@ -155,7 +157,7 @@ int mouse_init(void)
     mouse_write(0xF4);       /* ma'lumot yuborishni boshlash */
 
     /* Kontrollerda qolib ketgan baytlarni tozalash */
-    while (inb(PS2_STATUS) & 0x01)
+    for (int i = 0; i < 64 && (inb(PS2_STATUS) & 0x01); i++)
         inb(PS2_DATA);
 
     irq_register(12, mouse_handler);

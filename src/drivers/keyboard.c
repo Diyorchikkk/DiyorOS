@@ -164,11 +164,24 @@ static void keyboard_handler(registers_t *r)
         deliver(c);
 }
 
-void keyboard_init(void)
+/*
+ * PS/2 kontrolleri (i8042) bormi? Ba'zi zamonaviy kompyuterlarda u umuman yo'q
+ * (faqat USB): port 0x64 dan 0xFF o'qiladi. Bunday holda "kutish" tsikllari
+ * abadiy aylanib, yuklanish qotib qolardi (v0.9 gacha shunday edi).
+ */
+bool ps2_present(void)
 {
-    while (inb(0x64) & 1)        /* oldin qolgan ma'lumotlarni tozalash */
+    return inb(0x64) != 0xFF;
+}
+
+bool keyboard_init(void)
+{
+    if (!ps2_present())
+        return false;
+    for (int i = 0; i < 64 && (inb(0x64) & 1); i++)   /* oldin qolgan ma'lumotlarni tozalash */
         inb(KBD_DATA_PORT);
     irq_register(1, keyboard_handler);
+    return true;
 }
 
 void keyboard_inject(char c)

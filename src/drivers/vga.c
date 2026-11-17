@@ -30,6 +30,10 @@
  * hech narsani sezmaydi: ular avvalgidek vga_putc / kprintf chaqiradi.
  * Har bir o'zgarishda "generation" hisoblagichi oshadi — terminal oynasi
  * faqat u o'zgarganda qayta chiziladi.
+ *
+ * v0.9: UEFI kompyuterlarda VGA matn rejimi umuman yo'q. Bootloader grafik
+ * ekran bergan bo'lsa, konsol boshidanoq soya massivda yashaydi
+ * (vga_use_shadow), uni fbcon.c piksellarga chizadi.
  */
 #include "vga.h"
 #include "io.h"
@@ -47,6 +51,8 @@
 static uint16_t *vga_buffer = VGA_TEXT_MEMORY;
 static uint16_t shadow[VGA_WIDTH * VGA_HEIGHT];   /* grafik rejimdagi ekran nusxasi */
 static bool redirected = false;
+static bool shadow_only = false;                   /* v0.9: 0xB8000 umuman ishlatilmaydi */
+static void (*flush_hook)(void) = 0;               /* v0.9: yangi qatorda ekranni chizish (fbcon) */
 static uint16_t soft_cursor_pos = 0;               /* grafik rejimdagi kursor joyi */
 static bool soft_cursor_on = true;
 static volatile uint32_t generation = 0;           /* har o'zgarishda +1 */
@@ -246,6 +252,8 @@ void vga_putc(char c)
     else
         serial_putc(c);
     irq_restore(f);
+    if (c == '\n' && flush_hook)
+        flush_hook();                        /* yuklanish paytida: har qatordan keyin ekranga */
 }
 
 /* Berilgan rangda bitta belgi — umumiy "joriy rang" ga tegmasdan (user dasturlar uchun) */
@@ -418,6 +426,8 @@ void vga_move_hw_cursor(int x, int y)
    on = false: soya massiv 0xB8000 ga qaytariladi (matn rejimi tiklangandan keyin) */
 void vga_redirect(bool on)
 {
+    if (!on && shadow_only)
+        return;                              /* matn rejimi yo'q: konsol soya massivda qoladi */
     uint32_t f = irq_save();
     if (on && !redirected) {
         memcpy(shadow, VGA_TEXT_MEMORY, sizeof(shadow));
@@ -439,6 +449,25 @@ void vga_redirect(bool on)
     }
     generation++;
     irq_restore(f);
+}
+
+/* v0.9: bootloader grafik ekran bergan — konsol butunlay xotirada (vga_init dan oldin) */
+void vga_use_shadow(void)
+{
+    memset(shadow, 0, sizeof(shadow));
+    vga_buffer = shadow;
+    redirected = true;
+    shadow_only = true;
+}
+
+bool vga_shadow_only(void)
+{
+    return shadow_only;
+}
+
+void vga_set_flush_hook(void (*hook)(void))
+{
+    flush_hook = hook;
 }
 
 uint32_t vga_generation(void)

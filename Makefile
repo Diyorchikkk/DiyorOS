@@ -7,6 +7,11 @@
 #  make iso    — yuklanadigan ISO (GRUB kerak, ixtiyoriy)
 #  make clean  — build papkasini tozalash
 #
+#  v0.9 — zamonaviy kompyuterni sinash:
+#  make run-ahci — Q35 mashinasi: disk SATA (AHCI) kontrollerida, IDE yo'q
+#  make run-uefi — UEFI (BIOS emas) + Q35 + ISO. ISO da UEFI yuklovchisi bo'lishi
+#                  kerak: tayyor diyoros.iso (BIOS + UEFI) yoki UEFI ISO=yo'l
+#
 #  v0.6: disk.img — 64 MB virtual qattiq disk (birinchi 'make run' da yaratiladi,
 #  'make clean' uni o'chirmaydi: undagi fayllaringiz saqlanib qoladi).
 #  Yangi bo'sh disk: make newdisk
@@ -126,6 +131,24 @@ iso: $(KERNEL)
 
 run-iso: iso $(DISK)
 	$(QEMU) -cdrom $(ISO) -m 128M -rtc base=localtime $(QEMU_DISK) $(QEMU_SERIAL) $(QEMU_DISPLAY)
+
+# v0.9: disk SATA kontrollerida (AHCI) — zamonaviy kompyuterlardagidek
+AHCI_DISK := -drive file=$(DISK),format=raw,if=none,id=d0 -device ide-hd,drive=d0,bus=ide.0
+run-ahci: $(KERNEL) $(DISK)
+	$(QEMU) -M q35 -kernel $(KERNEL) -m 256M -rtc base=localtime $(AHCI_DISK) $(QEMU_SERIAL) $(QEMU_DISPLAY)
+
+# v0.9: UEFI firmware (OVMF / edk2). Mac: Homebrew QEMU bilan birga keladi
+ifeq ($(shell uname -s),Darwin)
+  OVMF := $(shell brew --prefix qemu 2>/dev/null)/share/qemu/edk2-x86_64-code.fd
+else
+  OVMF := /usr/share/OVMF/OVMF_CODE_4M.fd
+endif
+UEFI_ISO ?= diyoros.iso
+run-uefi: $(DISK)
+	qemu-system-x86_64 -M q35 -m 512M -rtc base=localtime \
+	  -drive if=pflash,format=raw,readonly=on,file=$(OVMF) \
+	  -drive file=$(UEFI_ISO),media=cdrom,if=none,id=cd0 -device ide-cd,drive=cd0,bus=ide.1 \
+	  $(AHCI_DISK) $(QEMU_SERIAL) $(QEMU_DISPLAY)
 
 clean:
 	rm -rf $(BUILD)
