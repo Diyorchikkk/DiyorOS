@@ -21,6 +21,7 @@
 #include "io.h"
 #include "task.h"
 #include "irq.h"
+#include "sync.h"
 
 #define KBD_DATA_PORT 0x60
 #define BUFFER_SIZE   256
@@ -46,7 +47,9 @@ static const char keymap_shift[128] = {
 static volatile char buffer[BUFFER_SIZE];
 static volatile uint32_t head = 0, tail = 0;   /* head — yozish, tail — o'qish */
 
-static task_t *waiter = 0;       /* tugma kutib BLOCKED bo'lgan vazifa */
+/* Tugma kutayotgan vazifalar. v0.8: bitta ko'rsatkich o'rniga kutish navbati —
+   bir guruhdagi ikki dastur (ota va bolasi) bir vaqtda kutsa ham hech biri yo'qolmaydi */
+static wait_queue_t waiters;
 
 static key_hook_t key_hook = 0;
 
@@ -62,10 +65,7 @@ static void buffer_push(char c)
         buffer[head] = c;
         head = next;
     }
-    if (waiter) {                /* kutayotgan vazifani uyg'otamiz */
-        task_unblock(waiter);
-        waiter = 0;
-    }
+    wq_wake_all(&waiters);       /* kutayotganlarni uyg'otamiz: birinchi ulgurgani oladi */
 }
 
 /* Klaviaturadan kelgan tugma: avval ilgakka, u olmasa — buferga */
@@ -189,28 +189,19 @@ char keyboard_getchar(void)
         if (head != tail) {
             char c = buffer[tail];
             tail = (tail + 1) % BUFFER_SIZE;
-            irq_restore(flags);          /* avvalgi holatga (syscall ichida — o'chiq qoladi) */
+            irq_restore(flags);
             return c;
         }
         if (sched_active()) {
-            if (task_should_abort()) {       /* v0.8: jarayonga signal keldi — kutmaymiz */
+            /* v0.8: uzilishli kutish — jarayonga signal (Ctrl+C, kill) kelsa, 0 qaytadi */
+            if (wq_wait(&waiters, "klaviatura", true) == SYNC_EINTR) {
                 irq_restore(flags);
                 return 0;
             }
-            waiter = task_current();
-            task_current()->wait_reason = "klaviatura";
-            task_block();
-            task_current()->wait_reason = 0;
-            if (waiter == task_current())
-                waiter = 0;
         } else {
             __asm__ volatile ("sti; hlt");
         }
     }
 }
 
-void keyboard_cancel_waiter(void *task)
-{
-    if (waiter == task)
-        waiter = 0;
-}
+

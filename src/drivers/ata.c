@@ -19,6 +19,7 @@
 #include "io.h"
 #include "irq.h"
 #include "sync.h"
+#include "klog.h"
 
 /* v0.8: diskka bir vaqtda faqat bitta vazifa murojaat qiladi. Avval uzilishlar
    o'chirilardi (butun tizim kutardi); endi kutayotgan vazifa uxlaydi */
@@ -35,7 +36,8 @@ static void ata_lock(void)
         }
         irq_restore(f);
     }
-    mutex_lock(&ata_mutex);
+    if (mutex_lock(&ata_mutex) != SYNC_OK)
+        panic("ata qulfida deadlock (qulflar tartibi buzilgan)");
 }
 #include "string.h"
 

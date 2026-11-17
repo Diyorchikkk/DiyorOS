@@ -23,6 +23,7 @@
 #include "string.h"
 #include "config.h"
 #include "sync.h"
+#include "gui.h"
 
 /* ------------------------------ Yordamchilar ------------------------------ */
 
@@ -283,6 +284,12 @@ void cmd_kill(const char *args)
     if (pid == 0 || pid == 1) {
         kprintf("PID %u (%s) tizim vazifasi, uni to'xtatib bo'lmaydi\n",
                 pid, pid == 0 ? "idle" : "shell");
+        return;
+    }
+    if (pid == gui_wm_pid()) {
+        /* Oyna menejerini o'ldirsak, ekran grafik rejimda egasiz qolardi — tartib bilan yopamiz */
+        gui_request_stop();
+        kprintf("PID %u - oyna menejeri: grafik rejim yopilmoqda, matn rejimiga qaytiladi\n", pid);
         return;
     }
     if (task_kill(pid)) {

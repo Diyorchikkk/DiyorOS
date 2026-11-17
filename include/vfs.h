@@ -154,7 +154,6 @@ int         vfs_fd_count(uint32_t pid);      /* jarayon ochgan fayllar soni */
 int         vfs_pipe(int fds[2]);            /* fds[0] — o'qish, fds[1] — yozish uchi */
 int         vfs_dup(int fd, uint32_t owner); /* xuddi shu fayl/pipe ga yangi deskriptor */
 void        vfs_fd_set_owner(int fd, uint32_t pid);
-bool        vfs_fd_is_pipe(int fd);
 void        vfs_lock(void);                  /* VFS va fayl tizimlarining umumiy (rekursiv) qulfi */
 void        vfs_unlock(void);
 

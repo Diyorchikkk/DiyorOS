@@ -70,8 +70,9 @@ void cmd_disk(const char *args)
     kprintf("Fayl tizimi:    FAT32, nomi \"%s\", ID %x\n", st.label, st.volume_id);
     kprintf("Klaster:        %u bayt, jami %u ta\n", st.cluster_bytes, st.total_clusters);
     kprintf("FAT jadvali:    %u sektor (x2 nusxa)\n", st.fat_sectors);
-    kprintf("Band / bo'sh:   %u KB / %u MB\n",
-            (st.total_clusters - st.free_clusters) * (st.cluster_bytes / 512) / 2, st.free_clusters / mb);
+    kprintf("Band / bo'sh:   %u KB / %u KB (%u MB)\n",
+            (st.total_clusters - st.free_clusters) * (st.cluster_bytes / 512) / 2,
+            st.free_clusters * (st.cluster_bytes / 512) / 2, st.free_clusters / mb);
     kprintf("Ulangan joyi:   /disk\n");
 }
 
@@ -132,7 +133,8 @@ void cmd_mount(const char *args)
     if (strcmp(args, "disk") == 0) {
         int err = disk_mount();
         if (err)
-            kprintf("mount: %s\n", err == VFS_EINVAL ? "disk FAT32 da formatlanmagan (mkfs)"
+            kprintf("mount: %s\n", err == VFS_EINVAL ? "disk FAT32 da formatlanmagan (mkfs)" :
+                                   err == VFS_EBUSY  ? "disk allaqachon /disk ga ulangan"
                                                      : vfs_strerror(err));
         else
             kprintf("Disk /disk ga ulandi\n");

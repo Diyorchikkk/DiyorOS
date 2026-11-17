@@ -248,6 +248,21 @@ void vga_putc(char c)
     irq_restore(f);
 }
 
+/* Berilgan rangda bitta belgi — umumiy "joriy rang" ga tegmasdan (user dasturlar uchun) */
+void vga_putc_color(char c, uint8_t color)
+{
+    uint32_t f = irq_save();
+    uint8_t old = current_color;
+    current_color = color;
+    vga_putc_locked(c);
+    current_color = old;
+    if (c == '\b')
+        serial_puts("\b \b");
+    else
+        serial_putc(c);
+    irq_restore(f);
+}
+
 /* Faqat ekranga (serial portga nusxasiz). Shell qatorni tahrirlayotganda har bir
    qayta chizish terminalga takror chiqmasligi uchun: tayyor qator Enter da yuboriladi */
 void vga_putc_local(char c)

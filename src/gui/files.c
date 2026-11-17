@@ -78,7 +78,7 @@ static int compare(const fentry_t *a, const fentry_t *b)
     return strcmp(a->name, b->name);
 }
 
-static void load(files_t *f)
+static void load_locked(files_t *f)
 {
     f->count = 0;
     f->scroll = 0;
@@ -124,6 +124,14 @@ static void load(files_t *f)
         ksnprintf(f->status, sizeof(f->status), "Disk ulanmagan (terminalda: mkfs yoki mount disk)");
     else
         ksnprintf(f->status, sizeof(f->status), "%d ta element", f->count - (f->count && f->entries[0].kind == K_PARENT));
+}
+
+/* Papkani o'qish paytida tugunlar o'chirilmasligi uchun — VFS qulfi ostida */
+static void load(files_t *f)
+{
+    vfs_lock();
+    load_locked(f);
+    vfs_unlock();
 }
 
 static void small_icon(surface_t *s, int x, int y, int kind)

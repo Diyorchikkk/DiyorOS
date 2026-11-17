@@ -237,6 +237,10 @@ static void fsinfo_invalidate(void)
 /* Bo'sh klaster topib, zanjirga (prev dan keyin) ulash. 0 — joy yo'q */
 static uint32_t alloc_cluster(uint32_t prev)
 {
+    /* Disk to'la ekani ma'lum bo'lsa — butun FAT ni (yuzlab sektor) qayta o'qib chiqmaymiz.
+       Aks holda to'la diskka har bir yozish urinishi soniyalab davom etardi */
+    if (fs.free_valid && fs.free_count == 0)
+        return 0;
     fsinfo_invalidate();
     for (uint32_t i = 0; i < fs.cluster_count; i++) {
         uint32_t c = 2 + (fs.free_hint - 2 + i) % fs.cluster_count;
@@ -253,6 +257,8 @@ static uint32_t alloc_cluster(uint32_t prev)
             fs.free_count--;
         return c;
     }
+    fs.free_count = 0;                         /* butun FAT ko'rildi: bo'sh klaster yo'q */
+    fs.free_valid = true;
     return 0;
 }
 

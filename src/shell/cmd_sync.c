@@ -1,7 +1,7 @@
 /*
  * cmd_sync.c — "sinx" buyrug'i: sinxronizatsiya masalalari namoyishi (v0.8).
  *
- *   sinx               qisqa yordam va /proc/sync holati
+ *   sinx               qisqa yordam
  *   sinx poyga         race condition: qulfsiz counter++ va mutex bilan
  *   sinx ishlab        producer-consumer: semaforlar + mutex, 5 o'rinli bufer
  *   sinx deadlock      ikki oqim A->B va B->A tartibda qulf oladi: aniqlash va chiqish
@@ -60,6 +60,21 @@ static uint32_t rnd(uint32_t lo, uint32_t hi)    /* [lo, hi] */
 static uint32_t ms_since(uint32_t start)
 {
     return (timer_ticks() - start) * (1000 / TIMER_HZ);
+}
+
+/* Namoyish uchun count ta oqimga joy bormi (vazifalar jadvali 16 ta) */
+static bool have_slots(int count)
+{
+    task_reap();                             /* tugagan vazifalar joyini bo'shatamiz */
+    int unused = 0;
+    for (int i = 0; i < MAX_TASKS; i++)
+        if (task_get(i)->state == TASK_UNUSED)
+            unused++;
+    if (unused >= count)
+        return true;
+    say(VGA_LIGHT_RED, "sinx: namoyishga %d ta oqim kerak, vazifalar jadvalida %d ta joy bor.\n"
+                       "Keraksiz vazifalarni to'xtating: ps, kill <PID>\n", count, unused);
+    return false;
 }
 
 /* Oqimlarni ishga tushirib, hammasi tugashini kutish */
@@ -240,8 +255,9 @@ static void demo_producer_consumer(void)
     run_threads("pc", 4, pc_thread);
     say(VGA_LIGHT_GREEN, "\nJami: %d ishlab chiqarildi, %d iste'mol qilindi, buferda %d qoldi.\n",
         pc_next_item, 2 * PC_ITEMS, pc_count);
-    say(VGA_LIGHT_GREY, "Kutishlar: ishlab chiqaruvchilar %u marta (bufer to'la), iste'molchilar %u marta\n"
-                        "(bufer bo'sh). Hech kim band-kutishda (busy wait) protsessorni yemadi: ular uxladi.\n",
+    say(VGA_LIGHT_GREY, "Kutishlar: ishlab chiqaruvchilar %u marta (bufer to'la),\n"
+                        "iste'molchilar %u marta (bufer bo'sh). Kutayotganlar uxladi - hech kim\n"
+                        "band-kutishda (busy wait) protsessorni sarflamadi.\n",
         pc_empty.waits, pc_full.waits);
 }
 
@@ -289,7 +305,7 @@ static void demo_deadlock(void)
     run_threads("dl", 2, deadlock_thread);
     say(VGA_LIGHT_GREY, "\nIkkala oqim ham tugadi (%u ms). Aniqlangan deadlocklar: %u.\n",
         ms_since(t0), dl_a.deadlocks + dl_b.deadlocks);
-    say(VGA_LIGHT_GREY, "Aniqlagich bo'lmasa, ikkalasi abadiy kutib qolardi (tizimning shu qismi qotadi).\n");
+    say(VGA_LIGHT_GREY, "Aniqlagich bo'lmasa, ikkalasi bir-birini abadiy kutib qolardi.\n");
 }
 
 /* --------------------------- 4. Ovqatlanayotgan faylasuflar --------------------------- */
@@ -354,8 +370,8 @@ static void philosopher(uint32_t arg)
 static void demo_philosophers(bool ordered)
 {
     say(VGA_WHITE, "OVQATLANAYOTGAN FAYLASUFLAR (Dijkstra, 1965): 5 faylasuf, 5 vilka\n");
-    say(VGA_LIGHT_GREY, "  Yeyish uchun ikkala yonidagi vilka kerak. Holat: o - o'ylayapti, k - kutyapti,\n"
-                        "  Y - yeyapti, - - tugatdi.\n");
+    say(VGA_LIGHT_GREY, "  Yeyish uchun ikkala yonidagi vilka kerak.\n"
+                        "  Holat: o - o'ylayapti, k - kutyapti, Y - yeyapti, - - tugatdi.\n");
     if (ordered)
         say(VGA_LIGHT_GREY, "  Yechim: vilkalar raqamlangan, har kim avval KICHIK raqamlisini oladi -\n"
                             "  aylana hosil bo'lmaydi (aylanma kutish sharti buziladi).\n\n");
@@ -389,15 +405,19 @@ void cmd_sinx(const char *args)
     const char *rest = shell_next_arg(args, what, sizeof(what));
     shell_next_arg(rest, opt, sizeof(opt));
 
-    if (strcmp(what, "poyga") == 0)
-        demo_race();
-    else if (strcmp(what, "ishlab") == 0)
-        demo_producer_consumer();
-    else if (strcmp(what, "deadlock") == 0)
-        demo_deadlock();
-    else if (strcmp(what, "faylasuflar") == 0)
-        demo_philosophers(strcmp(opt, "tartib") == 0);
-    else {
+    if (strcmp(what, "poyga") == 0) {
+        if (have_slots(RACE_THREADS))
+            demo_race();
+    } else if (strcmp(what, "ishlab") == 0) {
+        if (have_slots(4))
+            demo_producer_consumer();
+    } else if (strcmp(what, "deadlock") == 0) {
+        if (have_slots(2))
+            demo_deadlock();
+    } else if (strcmp(what, "faylasuflar") == 0) {
+        if (have_slots(PHILS))
+            demo_philosophers(strcmp(opt, "tartib") == 0);
+    } else {
         kprintf("Sinxronizatsiya namoyishlari (v0.8):\n"
                 "  sinx poyga                race condition: qulfsiz va mutex bilan\n"
                 "  sinx ishlab               producer-consumer (semafor + mutex)\n"

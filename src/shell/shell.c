@@ -692,12 +692,23 @@ static void cmd_help(const char *args)
     kprintf("Dasturlar (/bin, v0.5):\n ");
     vga_set_color(VGA_YELLOW, VGA_BLACK);
     vfs_node_t *bin, *c;
-    if (vfs_lookup("/bin", &bin) == VFS_OK)
-        for (uint32_t i = 0; (c = vfs_readdir(bin, i)); i++)
+    vfs_lock();
+    if (vfs_lookup("/bin", &bin) == VFS_OK) {
+        int col = 1;
+        for (uint32_t i = 0; (c = vfs_readdir(bin, i)); i++) {
+            int w = (int)strlen(c->name) + 1;
+            if (col + w > 78) {              /* 80 ustunga sig'masa — yangi qator */
+                kprintf("\n ");
+                col = 1;
+            }
             kprintf(" %s", c->name);
+            col += w;
+        }
+    }
+    vfs_unlock();
     normal();
     kprintf("\nBatafsil: help <buyruq>.  Dasturni fonda ishlatish: nom &   To'xtatish: Ctrl+C\n");
-    kprintf("Kanal: ls | grep o | wc   Faylga: sanoq 9 > f.txt (>> qo'shish)   Fayldan: wc < f.txt\n");
+    kprintf("Kanal: ls | grep o | wc    Faylga: sanoq 9 > f.txt (>> qo'shadi)    wc < f.txt\n");
     kprintf("Tab - to'ldirish, strelkalar - tarix va qator tahriri, g'ildirak - varaqlash.\n");
 }
 
@@ -717,7 +728,7 @@ static void show_line_again(const char *buf)
  * Bitta mos kelsa — to'liq yoziladi; bir nechta bo'lsa — umumiy qismi
  * yoziladi, umumiy qism bo'lmasa — variantlar ro'yxati chiqariladi.
  */
-static void tab_complete(char *buf, int *len)
+static void tab_complete_locked(char *buf, int *len)
 {
     int start = *len;
     while (start > 0 && !(buf[start - 1] == ' ' && (start < 2 || buf[start - 2] != '\\')))
@@ -816,6 +827,15 @@ static void tab_complete(char *buf, int *len)
         show_line_again(buf);
     }
     buf[*len] = 0;
+}
+
+/* Variantlar — tugun nomlariga ko'rsatkichlar: ular bilan ishlab bo'lguncha VFS qulfi
+   ushlanadi (boshqa vazifa faylni o'chirib yubormasin) */
+static void tab_complete(char *buf, int *len)
+{
+    vfs_lock();
+    tab_complete_locked(buf, len);
+    vfs_unlock();
 }
 
 /* ------------------------- Dasturlarni ishga tushirish ------------------------- */
@@ -1199,13 +1219,15 @@ static void report_finished(void)
         task_t *parent = task_find(t->parent_pid);
         if (parent && parent->user && parent->state != TASK_ZOMBIE)
             continue;                        /* v0.8: bu bolani otasi o'zi wait() bilan yig'adi */
-        if (t->exit_code != EXIT_TTIN) {     /* bu holatda xabar allaqachon chiqarilgan */
+        /* TTIN da xabar allaqachon chiqqan; KILLED — oynasi yopilgan grafik dastur */
+        if (t->exit_code != EXIT_TTIN && t->exit_code != EXIT_KILLED) {
             vga_set_color(VGA_DARK_GREY, VGA_BLACK);
             kprintf("[PID %u] %s tugadi (kod %d)\n", t->pid, t->name, t->exit_code);
             normal();
         }
         task_reap_pid(t->pid);
     }
+    task_reap();                             /* tugagan kernel oqimlari (masalan, oyna menejeri) */
 }
 
 static const command_t *find_command(const char *name)

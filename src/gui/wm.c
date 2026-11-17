@@ -31,9 +31,9 @@
  *
  * QULF
  * Oynalar ro'yxatini ham wm oqimi, ham dasturlar (syscall orqali) o'zgartiradi.
- * Bir vaqtda o'zgartirilmasligi uchun oddiy qulf ishlatiladi: band bo'lsa,
- * vazifa navbatini boshqaga beradi (task_yield) va keyin qayta urinadi.
- * Bu v0.8 da qilinadigan mutex ning sodda ko'rinishi.
+ * Bir vaqtda o'zgartirilmasligi uchun "wm" mutexi ishlatiladi (v0.8): band
+ * bo'lsa, vazifa uxlaydi va qulf bo'shaganda navbat bilan uyg'otiladi.
+ * Qulflar tartibi butun kernelda bir xil: wm -> vfs -> ata (teskarisi yo'q).
  */
 #include "gui.h"
 #include "sync.h"
@@ -200,7 +200,8 @@ static void wm_lock(void)
         }
         irq_restore(f);
     }
-    mutex_lock(&wm_mutex);
+    if (mutex_lock(&wm_mutex) != SYNC_OK)
+        panic("wm qulfida deadlock (qulflar tartibi buzilgan)");
 }
 
 static void wm_unlock(void)
@@ -548,8 +549,10 @@ static void close_window(window_t *w)
         /* Dasturga "yopil" deb xabar beramiz. Ikkinchi marta bosilsa — majburan to'xtatamiz
            (dastur osilib qolgan bo'lishi mumkin) */
         if (w->close_tick) {
+            /* Signal yuboramiz va kutmaymiz (wm qulfi bizda — dastur shu qulfni kutayotgan
+               bo'lishi mumkin). U tugagach oynasini collect_garbage yopadi */
             klog("wm: PID %u javob bermadi - to'xtatildi", w->owner);
-            task_kill(w->owner);
+            task_signal_kill(w->owner, EXIT_KILLED);
         } else {
             queue_push(w, GUI_EV_CLOSE, 0, 0, 0, 0);
             w->close_tick = timer_ticks() | 1;
@@ -1000,7 +1003,7 @@ static void teardown(void)
         if (!windows[i].used)
             continue;
         if (windows[i].owner)
-            task_kill(windows[i].owner);
+            task_signal_kill(windows[i].owner, EXIT_KILLED);   /* kutmasdan: yuqoridagi izoh */
         wm_destroy(&windows[i]);
     }
     fb_text_mode();
@@ -1117,6 +1120,13 @@ const char *gui_start(void)
 void gui_request_stop(void)
 {
     stop_requested = true;
+}
+
+/* Oyna menejeri oqimining PID i (0 — grafik rejim yo'q). "kill" uni to'g'ridan-to'g'ri
+   o'ldirmasligi uchun: ekran grafik rejimda egasiz qolib ketardi */
+uint32_t gui_wm_pid(void)
+{
+    return (running && wm_task) ? wm_task->pid : 0;
 }
 
 /* ------------------------------ Syscall lar ------------------------------ */

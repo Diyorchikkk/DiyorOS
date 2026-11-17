@@ -31,8 +31,9 @@
  * mutex_lock kutishga o'tishdan oldin "kim kimni kutyapti" zanjiri bo'ylab
  * yuradi (resurslarni taqsimlash grafi): mutex -> egasi -> u kutayotgan mutex
  * -> uning egasi ... Zanjir o'zimizga qaytsa — aylana, ya'ni deadlock. Bunday
- * holda kutmaymiz, SYNC_EDEADLK qaytaramiz (Linux da: lockdep, pthread ning
- * ERRORCHECK mutexi).
+ * holda kutmaymiz, SYNC_EDEADLK qaytaramiz. Linux yadrosi POSIX fayl qulflarida
+ * (fcntl F_SETLKW) aynan shunday zanjirni tekshirib EDEADLK qaytaradi;
+ * ma'lumotlar bazalari ham tranzaksiya qulflarida shu usulni ishlatadi.
  *
  * MUHIM QOIDA: kutish ro'yxatini tekshirish va vazifani uxlatish bo'linmas
  * bo'lishi kerak. Aks holda "tekshirdim — bo'sh emas — (shu payt egasi
@@ -285,7 +286,23 @@ void mutex_unlock(mutex_t *m)
               m->name, t->name, t->pid, m->owner ? m->owner->name : "yo'q");
     if (--m->depth == 0)
         handoff(m);
+    /* kill qilingan kernel oqimi: oxirgi qulfini bo'shatdi — endi xavfsiz tugaydi */
+    bool die = !t->user && t->kill_pending && !sync_holds_mutex(t);
     irq_restore(f);
+    if (die)
+        task_exit_code(t->kill_code);
+}
+
+/* Vazifa hozir biror mutexni ushlab turibdimi (task_kill: kernel oqimini qachon
+   to'xtatish xavfsizligini bilish uchun) */
+bool sync_holds_mutex(const task_t *t)
+{
+    uint32_t f = irq_save();
+    bool held = false;
+    for (mutex_t *m = all_mutexes; m && !held; m = m->next)
+        held = m->owner == t;
+    irq_restore(f);
+    return held;
 }
 
 bool mutex_owned(const mutex_t *m)

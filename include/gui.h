@@ -65,6 +65,7 @@ bool        gui_available(void);
 bool        gui_active(void);
 const char *gui_start(void);          /* 0 — muvaffaqiyat, aks holda xato matni */
 void        gui_request_stop(void);
+uint32_t    gui_wm_pid(void);         /* oyna menejeri oqimi (0 — grafik rejim yo'q) */
 void        gui_set_mouse_speed(int speed);   /* 1..10, 5 — standart */
 int         gui_mouse_speed(void);
 

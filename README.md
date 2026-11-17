@@ -219,6 +219,7 @@ protsessor boshqa vazifalarga beriladi.
   chunki buzilgan kernel bilan davom etish ma'lumotlarni yo'qotishi mumkin.
 
 Har bir bosqichga oid savollar: `docs/v0.2-xotira.md` ... `docs/v0.8-sinxronizatsiya.md`.
+Ustozga ko'rsatish uchun qisqa reja va eng ehtimoliy savollar: [docs/ustozga-korsatish.md](docs/ustozga-korsatish.md).
 
 ---
 

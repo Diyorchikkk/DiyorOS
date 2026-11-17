@@ -82,6 +82,8 @@ typedef struct task {
     uint32_t           pgid;          /* quvurdagi (a | b | c) barcha jarayonlar bitta guruhda */
     int                fd_in;         /* stdin: -1 — klaviatura, aks holda VFS fd (pipe) */
     int                fd_out;        /* stdout: -1 — ekran */
+    uint8_t            color;         /* ekranga yozish rangi (setcolor) — har jarayonniki o'ziniki */
+    bool               out_failed;    /* yo'naltirilgan stdout ga yozishda xato bo'lgan (xabar bir marta) */
 } task_t;
 
 #define EXIT_KILLED   (-9)      /* kill buyrug'i bilan */

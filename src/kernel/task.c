@@ -114,6 +114,7 @@ void sched_init(void)
     if (!idle_pid || !idle_task)
         panic("sched_init: idle vazifasini yaratib bo'lmadi");
     idle_task->pid = 0;                /* an'anaga ko'ra idle — PID 0 */
+    idle_task->pgid = 0;
     next_pid = 2;
 
     active = true;
@@ -168,7 +169,8 @@ uint32_t task_create(const char *name, task_entry_t entry, uint32_t arg)
     return pid;
 }
 
-/* ZOMBIE vazifalarning steklarini bo'shatish. Faqat shell kontekstidan chaqiriladi */
+/* ZOMBIE vazifalarning stek va xotirasini bo'shatish. Vazifa kontekstidan chaqiriladi
+   (shell, oyna menejeri, wait syscall) — uzilish ichidan emas: kfree va VFS qulfi kerak */
 static void reap(uint32_t only_pid)
 {
     for (int i = 0; i < MAX_TASKS; i++) {
@@ -223,7 +225,6 @@ static void make_zombie(task_t *t, int32_t code)
     t->exit_code = code;
     if (fpu_owner == t)
         fpu_owner = 0;                 /* uning FPU holati endi hech kimga kerak emas */
-    keyboard_cancel_waiter(t);
     sync_task_died(t);                 /* navbatlardan chiqarish, ushlagan mutexlarini bo'shatish */
     wake_waiters(t->pid);
     need_resched = true;
@@ -268,8 +269,29 @@ bool task_kill(uint32_t pid)
         task_reap();
         return true;
     }
-    /* Kernel oqimi: darhol to'xtatamiz. U ushlab turgan mutexlar sync_task_died da
-       navbatdagiga topshiriladi (robust mutex) */
+    /*
+     * Kernel oqimi. Qulf ushlamagan bo'lsa — darhol to'xtatamiz. Mutex ushlab turgan
+     * bo'lsa (masalan, vfs: fayl tizimi yarim o'zgartirilgan), kutamiz: oqim oxirgi
+     * qulfini bo'shatganda mutex_unlock ichida o'zi tugaydi.
+     */
+    if (sync_holds_mutex(t)) {
+        t->kill_code = EXIT_KILLED;
+        t->kill_pending = true;
+        irq_restore(flags);
+        for (int i = 0; i < 100; i++) {            /* 1 soniyagacha kutamiz */
+            task_t *k = task_find(pid);
+            if (!k || k->state == TASK_ZOMBIE)
+                break;
+            task_sleep_ticks(1);
+        }
+        flags = irq_save();
+        t = task_find(pid);
+        if (t)
+            strcpy(t->note, "o'ldirildi (kill)");
+        irq_restore(flags);
+        task_reap();
+        return true;
+    }
     make_zombie(t, EXIT_KILLED);
     strcpy(t->note, "o'ldirildi (kill)");
     irq_restore(flags);
@@ -363,6 +385,7 @@ int32_t task_wait(uint32_t pid)
         current->wait_pid = pid;
         current->wait_reason = "wait";
         task_block();                  /* make_zombie -> wake_waiters bizni uyg'otadi */
+        current->wait_pid = 0;         /* signal bilan uyg'ongan bo'lsak ham: eski belgi qolmasin */
         current->wait_reason = 0;
         irq_restore(flags);
     }
@@ -406,6 +429,7 @@ uint32_t task_create_user(const char *name, uint32_t *page_dir, uint32_t entry,
     t->fd_in      = (opts && opts->fd_in > 0) ? opts->fd_in : -1;
     t->fd_out     = (opts && opts->fd_out > 0) ? opts->fd_out : -1;
     t->pgid       = (opts && opts->pgid) ? opts->pgid : t->pid;
+    t->color      = 0x07;                      /* och kulrang, qora fonda */
     /* stdin/stdout deskriptorlari endi bolaniki: u tugaganda ular yopiladi */
     vfs_fd_set_owner(t->fd_in, t->pid);
     vfs_fd_set_owner(t->fd_out, t->pid);

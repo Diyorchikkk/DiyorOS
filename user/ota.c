@@ -3,9 +3,9 @@
  *
  *   ota          1) hello ni ishga tushirib, tugashini kutadi va chiqish kodini oladi
  *                2) kanal (pipe) yaratib, wc ni ishga tushiradi: wc ning stdin i —
- *                   kanalning o'qish uchi. Ota kanalga 300 qator yozadi (~12 KB, bufer
- *                   4 KB — ota bir necha marta kutib qoladi), keyin yozish uchini
- *                   yopadi: wc EOF ni ko'rib natijani chiqaradi.
+ *                   kanalning o'qish uchi. Ota kanalga 300 qator yozadi (~9,5 KB, bufer
+ *                   4 KB — to'lganda ota uxlaydi, wc o'qigach davom etadi), keyin
+ *                   yozish uchini yopadi: wc EOF ni ko'rib natijani chiqaradi.
  *
  * Unix da bu fork() + exec() + wait() + pipe() bilan qilinadi. DiyorOS da
  * fork yo'q (butun xotirani nusxalash kerak bo'lardi): spawn() bitta qadamda

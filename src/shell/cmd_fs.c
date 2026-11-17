@@ -115,9 +115,9 @@ static uint32_t count_children(vfs_node_t *dir)
 static void ls_line(vfs_node_t *n)
 {
     if (n->type == VFS_DIR)
-        kprintf("d  %6u ta  ", count_children(n));
+        kprintf("d  %8u ta  ", count_children(n));
     else
-        kprintf("-  %6u B   ", n->size);
+        kprintf("-  %8u B   ", n->size);
     print_time(&n->mtime);
     kprintf("  ");
     print_name(n);
@@ -126,7 +126,7 @@ static void ls_line(vfs_node_t *n)
 
 /* -------------------------------- Buyruqlar -------------------------------- */
 
-void cmd_ls(const char *args)
+static void ls_locked(const char *args)
 {
     char path[VFS_PATH_MAX];
     take_word(args, path, sizeof(path));
@@ -146,7 +146,7 @@ void cmd_ls(const char *args)
 
     save_color();
     with_color(VGA_DARK_GREY);
-    kprintf("T    HAJMI    O'ZGARTIRILGAN    NOMI\n");
+    kprintf("T      HAJMI    O'ZGARTIRILGAN    NOMI\n");
     restore_color();
 
     uint32_t i = 0, total = 0;
@@ -193,7 +193,7 @@ void cmd_mkdir(const char *args)
         fs_error("mkdir", path, err);
 }
 
-void cmd_touch(const char *args)
+static void touch_locked(const char *args)
 {
     char path[VFS_PATH_MAX];
     take_word(args, path, sizeof(path));
@@ -362,7 +362,7 @@ static void tree_walk(vfs_node_t *dir, char *prefix, int depth, uint32_t *files,
     }
 }
 
-void cmd_tree(const char *args)
+static void tree_locked(const char *args)
 {
     char path[VFS_PATH_MAX];
     take_word(args, path, sizeof(path));
@@ -391,7 +391,7 @@ void cmd_tree(const char *args)
     kprintf("\n%u ta papka, %u ta fayl\n", dirs, files);
 }
 
-void cmd_stat(const char *args)
+static void stat_locked(const char *args)
 {
     char path[VFS_PATH_MAX];
     take_word(args, path, sizeof(path));
@@ -459,9 +459,9 @@ void cmd_df(const char *args)
     fat32_stats_t st;
     fat32_stats(&st);
     if (st.mounted) {
-        kprintf("fat32        /disk     \"%s\": %u KB band, %u MB bo'sh (diskda)\n", st.label,
+        kprintf("fat32        /disk     \"%s\": %u KB band, %u KB bo'sh (diskda)\n", st.label,
                 (st.total_clusters - st.free_clusters) * (st.cluster_bytes / 512) / 2,
-                st.free_clusters / (1024 * 1024 / st.cluster_bytes));
+                st.free_clusters * (st.cluster_bytes / 512) / 2);
     }
     kprintf("\n");
     kprintf("ramfs heap dan egallagan joy: %u bayt (tugunlar + fayl buferlari)\n", alloc);
@@ -507,3 +507,15 @@ bool shell_redirect(const char *args)
     vfs_close(fd);
     return true;
 }
+
+/*
+ * v0.8: bu buyruqlar tugun (vfs_node_t) ko'rsatkichlarini bir nechta VFS chaqiruvi
+ * orasida ushlab turadi. Shu payt boshqa vazifa (masalan, grafik rejimdagi Fayllar
+ * oynasi) o'sha faylni o'chirsa, ko'rsatkich bo'shatilgan xotiraga qarab qolardi
+ * (use-after-free). Shuning uchun butun buyruq VFS qulfi ostida bajariladi.
+ * Ekranga yozish hech qachon uxlamaydi, demak qulf uzoq ushlanib qolmaydi.
+ */
+void cmd_ls(const char *args)    { vfs_lock(); ls_locked(args);    vfs_unlock(); }
+void cmd_tree(const char *args)  { vfs_lock(); tree_locked(args);  vfs_unlock(); }
+void cmd_stat(const char *args)  { vfs_lock(); stat_locked(args);  vfs_unlock(); }
+void cmd_touch(const char *args) { vfs_lock(); touch_locked(args); vfs_unlock(); }

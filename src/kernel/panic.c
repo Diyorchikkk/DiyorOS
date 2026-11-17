@@ -73,6 +73,7 @@ static void panic_header(void)
     if (in_panic)                           /* panic ichida yana xato: cheksiz tsiklga tushmaymiz */
         halt_forever();
     in_panic = true;
+    vga_set_capture(0);                     /* "crash | wc" kabi holat: xabar kanalga emas, ekranga */
 
     /* Grafik rejimda bo'lsak — xabar ko'rinishi uchun darhol matn rejimiga qaytamiz.
        Oyna menejeri endi ishlamaydi (uzilishlar o'chiq), shuning uchun bu yerda o'zimiz */

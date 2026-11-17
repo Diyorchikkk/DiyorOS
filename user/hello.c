@@ -32,8 +32,8 @@ int main(int argc, char **argv)
     printf("  malloc(10000):        %p\n", (unsigned)mem);
     sysinfo(&si);
     printf("  Men egallagan xotira: %u sahifa (%u KB)\n", si.user_pages, si.user_pages * 4);
-    printf("  Tizim: %u KB RAM dan %u KB bo'sh, %u ta vazifa, ishlash vaqti %u ms\n",
-           si.mem_total_kb, si.mem_free_kb, si.task_count, si.uptime_ms);
+    printf("  Tizim: %u KB RAM dan %u KB bo'sh, %u ta vazifa, ishlash vaqti %u s\n",
+           si.mem_total_kb, si.mem_free_kb, si.task_count, si.uptime_ms / 1000);
     free(mem);
     return 0;
 }

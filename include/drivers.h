@@ -27,7 +27,6 @@ void     timer_on_second(void (*callback)(uint32_t seconds));
 void keyboard_init(void);
 char keyboard_getchar(void);   /* tugma bosilguncha kutadi */
 void keyboard_inject(char c);  /* boshqa drayver (sichqoncha) buferga belgi qo'shishi uchun */
-void keyboard_cancel_waiter(void *task);   /* tugagan vazifa tugmani endi kutmaydi */
 #define KEY_CTRL_C 0x03
 #define KEY_CTRL_K 0x0B   /* v0.6.1: shell qator tahriri */
 #define KEY_CTRL_L 0x0C

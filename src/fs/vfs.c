@@ -61,7 +61,10 @@ void vfs_lock(void)
         }
         irq_restore(f);
     }
-    mutex_lock(&vfs_mutex);
+    /* Kernel qulflari qat'iy tartibda olinadi (wm -> vfs -> ata), aylana bo'lishi mumkin
+       emas. Aniqlagich baribir topsa — bu kernel xatosi: jim davom etib bo'lmaydi */
+    if (mutex_lock(&vfs_mutex) != SYNC_OK)
+        panic("vfs qulfida deadlock (qulflar tartibi buzilgan)");
 }
 
 void vfs_unlock(void)
@@ -635,6 +638,14 @@ static int dup_locked(int fd, uint32_t owner)
     int nfd = alloc_fd();
     if (nfd < 0)
         return VFS_EMFILE;
+    /*
+     * Faylga yozadigan deskriptor nusxalansa (ota va bola bitta faylga yozadi:
+     * "ota > log"), ikkalasi ham "oxiriga qo'shish" rejimiga o'tadi. Aks holda har
+     * birining o'z pozitsiyasi bo'lib, bola otaning yozganlari ustidan yozib yuborardi.
+     * (Unix da buning uchun nusxalar bitta umumiy pozitsiyani bo'lishadi.)
+     */
+    if (f->node && (f->flags & VFS_O_WRITE))
+        f->flags |= VFS_O_APPEND;
     fds[nfd] = *f;
     fds[nfd].owner = owner;
     if (f->pipe)
@@ -730,16 +741,17 @@ int vfs_open(const char *path, uint32_t flags)
 }
 
 /*
- * Kanal deskriptori bo'lsa — pipe ni qulfsiz qaytaradi. Uni faqat egasi
- * ishlatadi va faqat egasi yopadi, shuning uchun qulf bo'shagach ham u yashaydi.
+ * Kanal deskriptori bo'lsa — pipe ni qaytaradi. VFS qulfi olinmaydi: deskriptorni
+ * faqat EGASI ishlatadi va faqat egasi yopadi (shu yerda tekshiriladi), demak
+ * jadvaldagi bu yozuv biz ishlayotganda o'zgarmaydi. Shu tufayli kanal orqali
+ * ma'lumot almashish diskka yozayotgan boshqa vazifani (vfs qulfini) kutmaydi.
  */
 static pipe_t *fd_pipe(int fd, uint32_t need_flag)
 {
-    vfs_lock();
     vfs_fd_t *f = get_fd(fd);
-    pipe_t *p = (f && f->pipe && (f->flags & need_flag)) ? f->pipe : 0;
-    vfs_unlock();
-    return p;
+    if (!f || !f->pipe || !(f->flags & need_flag) || f->owner != current_pid())
+        return 0;
+    return f->pipe;
 }
 
 int32_t vfs_read(int fd, void *buf, uint32_t len)
@@ -766,15 +778,6 @@ int vfs_pipe(int out[2])
 int vfs_dup(int fd, uint32_t owner)
 {
     VFS_CALL(int, dup_locked(fd, owner));
-}
-
-bool vfs_fd_is_pipe(int fd)
-{
-    vfs_lock();
-    vfs_fd_t *f = get_fd(fd);
-    bool r = f && f->pipe;
-    vfs_unlock();
-    return r;
 }
 
 /* Deskriptorni boshqa jarayonga berish (spawn: bolaning stdin/stdout i).

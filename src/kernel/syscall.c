@@ -65,9 +65,30 @@ static bool copy_string(char *dst, uint32_t src, uint32_t max)
     return false;                             /* juda uzun */
 }
 
+/*
+ * Dastur shu deskriptorni raqami bilan ishlata oladimi? O'ziniki bo'lishi kerak va
+ * yashirin stdin/stdout deskriptori bo'lmasligi kerak: ularga dastur faqat fd 0 / fd 1
+ * orqali murojaat qiladi. Aks holda close(3) bilan o'z stdout ini yopib qo'yishi,
+ * keyin o'sha raqam BOSHQA jarayonga berilsa — unga yozib yuborishi mumkin edi.
+ */
+static bool user_fd(const task_t *t, uint32_t fd)
+{
+    return (int)fd != t->fd_in && (int)fd != t->fd_out && vfs_fd_owned((int)fd, t->pid);
+}
+
+/* Ekranga jarayonning O'Z rangida yozish (v0.8: rang har bir jarayonniki — ikki dastur
+   bir vaqtda yozsa ham bir-birining rangini buzmaydi) */
+static void console_write(const task_t *t, const char *s, uint32_t len, bool is_error)
+{
+    uint8_t color = is_error ? (VGA_LIGHT_RED | (VGA_BLACK << 4)) : t->color;
+    for (uint32_t i = 0; i < len; i++)
+        vga_putc_color(s[i], color);
+}
+
 /* fd 0: klaviaturadan bitta qator (yozilganlar ekranda ko'rinadi, Backspace ishlaydi) */
 static int32_t read_line(char *buf, uint32_t len)
 {
+    uint8_t color = task_current()->color;
     uint32_t n = 0;
     while (n < len) {
         char c = keyboard_getchar();
@@ -76,20 +97,20 @@ static int32_t read_line(char *buf, uint32_t len)
         if (c == KEY_DELETE && n == 0)       /* Ctrl+D bo'sh qatorda — kiritish tugadi (EOF) */
             return 0;
         if (c == '\n') {
-            vga_putc('\n');
+            vga_putc_color('\n', color);
             buf[n++] = '\n';
             break;
         }
         if (c == '\b') {
             if (n > 0) {
                 n--;
-                vga_putc('\b');
+                vga_putc_color('\b', color);
             }
             continue;
         }
         if (c >= 32 && c < 127) {
             buf[n++] = c;
-            vga_putc(c);
+            vga_putc_color(c, color);
         }
     }
     return (int32_t)n;
@@ -110,20 +131,23 @@ static int32_t sys_write(uint32_t fd, uint32_t buf, uint32_t len)
             /* O'qiydigan tomon yopilgan (masalan "ota | grep" da grep tugadi).
                Unix dagidek (SIGPIPE) jarayon jimgina to'xtatiladi */
             task_signal_kill(t->pid, EXIT_PIPE);
+        } else if (r != VFS_EINTR && r < (int32_t)len && !t->out_failed && !task_should_abort()) {
+            /* "dastur > /disk/fayl": yozib bo'lmadi (odatda diskda joy tugagan). Dasturlar
+               printf natijasini tekshirmaydi — foydalanuvchi bexabar qolmasligi uchun
+               bir marta ekranga aytamiz */
+            t->out_failed = true;
+            char msg[96];
+            int n = ksnprintf(msg, sizeof(msg), "[PID %u] %s: chiqishni yozib bo'lmadi: %s\n",
+                              t->pid, t->name, vfs_strerror(r < 0 ? r : VFS_ENOSPC));
+            console_write(t, msg, (uint32_t)n, true);
         }
         return r;
     }
     if (fd == 1 || fd == 2) {
-        uint8_t old = vga_get_color();
-        if (fd == 2)
-            vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
-        for (uint32_t i = 0; i < len; i++)
-            vga_putc(s[i]);
-        if (fd == 2)
-            vga_set_color(old & 0x0F, old >> 4);
+        console_write(t, s, len, fd == 2);
         return (int32_t)len;
     }
-    if (!vfs_fd_owned(fd, t->pid))
+    if (!user_fd(t, fd))
         return VFS_EBADF;                     /* boshqa jarayonning fayli */
     int32_t r = vfs_write(fd, s, len);
     if (r == VFS_EPIPE)
@@ -158,7 +182,7 @@ static int32_t sys_read(uint32_t fd, uint32_t buf, uint32_t len)
         }
         return read_line((char *)buf, len);
     }
-    if (!vfs_fd_owned(fd, task_current()->pid))
+    if (!user_fd(t, fd))
         return VFS_EBADF;
     return vfs_read(fd, (void *)buf, len);
 }
@@ -175,7 +199,7 @@ static int32_t sys_open(uint32_t upath, uint32_t flags)
 
 static int32_t sys_close(uint32_t fd)
 {
-    if (!vfs_fd_owned(fd, task_current()->pid))
+    if (!user_fd(task_current(), fd))
         return VFS_EBADF;
     return vfs_close(fd);
 }
@@ -286,7 +310,7 @@ static int child_fd(int want, int inherited, uint32_t pid, int *out)
     int src = want >= 0 ? want : inherited;
     if (src < 0)
         return 0;
-    if (want >= 0 && !vfs_fd_owned(want, pid))
+    if (want >= 0 && !user_fd(task_current(), (uint32_t)want))
         return VFS_EBADF;
     int fd = vfs_dup(src, pid);
     if (fd < 0)
@@ -390,7 +414,7 @@ void syscall_handler(registers_t *r)
     case SYS_YIELD:    task_yield(); ret = 0; break;
     case SYS_SBRK:     ret = sys_sbrk((int32_t)a); break;
     case SYS_SYSINFO:  ret = sys_sysinfo(a); break;
-    case SYS_SETCOLOR: vga_set_color(a & 0x0F, VGA_BLACK); ret = 0; break;
+    case SYS_SETCOLOR: task_current()->color = a & 0x0F; ret = 0; break;   /* fon — qora */
     case SYS_CLEAR:    vga_clear(); ret = 0; break;
     case SYS_WIN_CREATE: ret = sys_win_create(a, b, c); break;
     case SYS_WIN_UPDATE: ret = sys_win_update(a, b); break;

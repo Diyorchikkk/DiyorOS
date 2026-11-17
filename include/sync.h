@@ -54,6 +54,7 @@ int  mutex_lock(mutex_t *m);              /* 0 yoki SYNC_EDEADLK */
 bool mutex_trylock(mutex_t *m);
 void mutex_unlock(mutex_t *m);
 bool mutex_owned(const mutex_t *m);       /* joriy vazifa egasimi */
+bool sync_holds_mutex(const task_t *t);   /* vazifa biror mutexni ushlab turibdimi */
 
 /* Semafor */
 void sem_init(semaphore_t *s, const char *name, int32_t initial);
