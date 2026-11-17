@@ -1,4 +1,4 @@
-# DiyorOS v0.9
+# DiyorOS v0.10
 
 C va Assembly'da noldan yozilgan operatsion tizim. Arxitektura: x86, 32-bit protected mode.
 Linux, Windows yoki boshqa OS kodidan foydalanilmagan: kompyuter yoqilgandan keyin ekranga chiqadigan
@@ -9,9 +9,11 @@ hamma narsani shu kod boshqaradi.
 Nimalari bor:
 
 - **Yuklanish**: Multiboot (QEMU `-kernel` yoki GRUB ISO), **BIOS va UEFI** (v0.9), GDT, IDT, PIC, TSS
-- **Xotira**: fizik xotira menejeri (bitmap), paging, har bir jarayonga alohida manzil maydoni, kernel heap
-- **Jarayonlar**: preemptive Round-Robin scheduler, kernel oqimlari, ring 3 dagi dasturlar (ELF), syscall'lar,
-  dasturdan dastur ishga tushirish (`spawn`/`wait`), signal (Ctrl+C butun jarayon guruhiga)
+- **Xotira**: fizik xotira menejeri (bitmap + frame hisoblagichlari), paging, har bir jarayonga alohida manzil
+  maydoni, **copy-on-write** (v0.10), kernel heap
+- **Jarayonlar**: preemptive Round-Robin scheduler, kernel oqimlari, ring 3 dagi dasturlar (ELF), 26 ta syscall,
+  Unix jarayon modeli — **`fork`, `exec`, `wait`, `dup2`** (v0.10) va `spawn`, signal (Ctrl+C butun guruhga),
+  har jarayonning o'z deskriptor jadvali va joriy papkasi; **user rejimidagi shell** (`qobiq`)
 - **Sinxronizatsiya va IPC** (v0.8): mutex (deadlock aniqlash bilan), semafor, kutish navbatlari, kanallar
   (`ls | grep o | wc`), `>` `>>` `<` yo'naltirish; syscall'lar ichida ham uzilishlar yoqiq (preemptive kernel)
 - **Fayl tizimlari**: VFS, ramfs, procfs (`/proc`), FAT32 (diskda, uzun nomlar bilan)
@@ -21,7 +23,7 @@ Nimalari bor:
   faqat o'qiladigan kernel kodi, Double Fault uchun alohida stek, FPU kontekstini saqlash
 - **Grafik interfeys** (v0.7): 1024x768, oyna menejeri va kompozitor, sichqoncha, vazifalar paneli,
   Start menyusi; Terminal, Fayllar, Tizim monitori, Chizish; ring 3 dagi grafik dasturlar (Mandelbrot, Ilon)
-- **Shell**: 49 ta buyruq, qator tahriri, tarix, Tab bilan to'ldirish, matn muharriri
+- **Shell**: 50 ta buyruq, qator tahriri, tarix, Tab bilan to'ldirish, matn muharriri
 
 ---
 
@@ -92,6 +94,10 @@ qaytarish: **Ctrl + Option + G**.
 | `ls /bin \| grep o \| wc`, `sanoq 100 > /disk/son.txt`, `ota` | **Kanallar, yo'naltirish, spawn/wait** |
 | `sinx poyga`, `sinx ishlab`, `sinx deadlock`, `sinx faylasuflar` | **Sinxronizatsiya**: race condition, producer-consumer, deadlock — batafsil: [docs/v0.8-sinxronizatsiya.md](docs/v0.8-sinxronizatsiya.md) |
 | `hw` | Kompyuter haqida hisobot: protsessor, ekran (VGA yoki UEFI framebuffer), disk drayveri — [docs/v0.9-haqiqiy-kompyuter.md](docs/v0.9-haqiqiy-kompyuter.md) |
+| `nusxa`, `mem` | **fork, copy-on-write, exec**: 1 MB fork da nusxalanmaydi, faqat yozilganda — [docs/v0.10-fork-exec.md](docs/v0.10-fork-exec.md) |
+| `qobiq` → `primes 100 \| wc`, `sanoq 5 > /disk/a.txt`, `cd /bin` | **User rejimidagi shell**: fork + pipe + dup2 + exec |
+| `fds`, `cat /proc/fds` | Deskriptor jadvallari: jarayon fd → ochiq fayl → fayl (uch qatlam) |
+| `hack 9`, Ctrl+C | Fork bomb: kernel chegaralari, butun guruhni to'xtatish |
 
 Har bir bosqichning batafsil demo ketma-ketligi va himoya savollari `docs/` papkasida.
 
@@ -119,9 +125,9 @@ DiyorOS/
 │   │   ├── kernel.c      asosiy funksiya: hamma qismni tartib bilan ishga tushiradi
 │   │   ├── gdt.c         segmentlar (ring 0 / ring 3), TSS, Double Fault TSS
 │   │   ├── idt.c         uzilishlar jadvali, PIC, soxta IRQ, exception'larni taqsimlash
-│   │   ├── task.c        vazifalar, scheduler, signal, stek qo'riqchisi, FPU konteksti
+│   │   ├── task.c        vazifalar, scheduler, fork/exec, signal, stek qo'riqchisi, FPU konteksti
 │   │   ├── sync.c        kutish navbati, mutex (deadlock aniqlash), semafor (v0.8)
-│   │   ├── process.c     ELF yuklovchi, dastur xatolarini ushlash
+│   │   ├── process.c     ELF yuklovchi (spawn, exec), dastur xatolarini ushlash
 │   │   ├── syscall.c     tizim chaqiruvlari, int 0x80
 │   │   ├── panic.c       kernel panic, backtrace, Double Fault (v0.6.1)
 │   │   ├── klog.c        kernel jurnali — dmesg (v0.6.1)
@@ -140,11 +146,11 @@ DiyorOS/
 │   │   ├── disk.c        blok qurilma qatlami: AHCI yoki ATA ni tanlaydi (v0.9)
 │   │   └── rtc.c         CMOS real vaqt soati
 │   ├── mm/
-│   │   ├── pmm.c         fizik xotira menejeri (bitmap)
-│   │   ├── paging.c      virtual xotira, jarayonlarning sahifa jadvallari
+│   │   ├── pmm.c         fizik xotira menejeri (bitmap, frame hisoblagichlari)
+│   │   ├── paging.c      virtual xotira, jarayonlarning sahifa jadvallari, copy-on-write
 │   │   └── kheap.c       kmalloc / kfree
 │   ├── fs/
-│   │   ├── vfs.c         yo'llar, fayl deskriptorlari, mount
+│   │   ├── vfs.c         yo'llar, deskriptor jadvallari, joriy papka, mount
 │   │   ├── ramfs.c       xotiradagi fayl tizimi
 │   │   ├── procfs.c      /proc virtual fayllari
 │   │   ├── fat32.c       FAT32: diskdagi fayl tizimi
@@ -168,7 +174,7 @@ DiyorOS/
 │   └── shell/
 │       ├── shell.c       buyruqlar qatori, qator tahriri, Tab
 │       ├── cmd_memory.c  mem, alloc, heap, memtest, pagefault...
-│       ├── cmd_process.c ps, spawn, kill, sched
+│       ├── cmd_process.c ps, fds, spawn, kill, sched
 │       ├── cmd_fs.c      ls, cd, cat, cp, mv, rm, tree...
 │       ├── cmd_disk.c    disk, mkfs, mount, umount
 │       ├── cmd_sync.c    sinx: poyga, ishlab chiqaruvchi-iste'molchi, deadlock, faylasuflar (v0.8)
@@ -181,7 +187,8 @@ DiyorOS/
     ├── linker.ld         dasturlar 0x40000000 dan joylashadi
     ├── initrd.s          dasturlarni kernel ichiga joylash
     ├── hello.c guess.c primes.c hack.c isolate.c kundalik.c pi.c mandel.c ilon.c
-    └── wc.c grep.c head.c sanoq.c ota.c   (v0.8: kanallar va spawn/wait uchun)
+    ├── wc.c grep.c head.c sanoq.c ota.c   (v0.8: kanallar va spawn/wait uchun)
+    └── nusxa.c qobiq.c   (v0.10: fork/CoW/exec namoyishi va user rejimidagi shell)
 ```
 
 ---
@@ -226,7 +233,7 @@ protsessor boshqa vazifalarga beriladi.
   o'ldiriladi ("Segmentation fault"). Kernelning o'zi xato qilsa — *kernel panic*: tizim to'xtaydi,
   chunki buzilgan kernel bilan davom etish ma'lumotlarni yo'qotishi mumkin.
 
-Har bir bosqichga oid savollar: `docs/v0.2-xotira.md` ... `docs/v0.9-haqiqiy-kompyuter.md`.
+Har bir bosqichga oid savollar: `docs/v0.2-xotira.md` ... `docs/v0.10-fork-exec.md`.
 Ustozga ko'rsatish uchun qisqa reja va eng ehtimoliy savollar: [docs/ustozga-korsatish.md](docs/ustozga-korsatish.md).
 
 ---
@@ -245,7 +252,7 @@ Ustozga ko'rsatish uchun qisqa reja va eng ehtimoliy savollar: [docs/ustozga-kor
 | **v0.7** ✅ | Grafik rejim, PCI, oyna menejeri, sichqoncha, 7 ta grafik dastur, oyna syscall lari — [batafsil](docs/v0.7-grafika.md) | Grafik quyi tizim, I/O |
 | **v0.8** ✅ | Mutex, semafor, deadlock aniqlash, kanallar, yo'naltirish, `spawn`/`wait`, signallar, preemptive kernel — [batafsil](docs/v0.8-sinxronizatsiya.md) | Sinxronizatsiya, IPC |
 | **v0.9** ✅ | UEFI, grafik konsol, AHCI (SATA, DMA), ichki diskni himoyalash, `hw` — [batafsil](docs/v0.9-haqiqiy-kompyuter.md) | Kiritish-chiqarish, yuklanish |
-| v0.10 | `fork` + copy-on-write, `exec`, har jarayonning o'z fd jadvali | Jarayonlar, xotira |
+| **v0.10** ✅ | `fork` + copy-on-write, `exec`, `dup2`, har jarayonning o'z fd jadvali va papkasi, user rejimidagi shell — [batafsil](docs/v0.10-fork-exec.md) | Jarayonlar, virtual xotira |
 | v0.11 | Avtomatik testlar, o'lchovlar, scheduler algoritmlarini taqqoslash | Tadqiqot |
 | v1.0 | Haqiqiy kompyuterda sinov natijalari, diplom matni, taqdimot | — |
 
