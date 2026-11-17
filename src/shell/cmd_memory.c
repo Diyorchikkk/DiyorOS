@@ -75,10 +75,6 @@ void cmd_mem(const char *args)
         kprintf("  RAM hajmi:        %u MB\n", pmm_memory_top() / (1024 * 1024));
     kprintf("  Frame lar (4 KB): jami %u, band %u, bo'sh %u\n", total, used, total - used);
     kprintf("  Bo'sh xotira:     %u KB\n", (total - used) * 4);
-    uint32_t copies, reused;
-    paging_cow_stats(&copies, &reused);
-    kprintf("  Umumiy (fork):    %u frame bir nechta jarayonda (copy-on-write)\n", pmm_shared_frames());
-    kprintf("  CoW hodisalari:   %u marta nusxa olindi, %u marta nusxasiz ochildi\n", copies, reused);
     kprintf("  Kernel:           0x%x - 0x%x (%u KB)\n",
             (uint32_t)kernel_start, (uint32_t)kernel_end,
             (uint32_t)(kernel_end - kernel_start) / 1024);

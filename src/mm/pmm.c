@@ -15,14 +15,6 @@
  * v0.6.1: frame ajratish va qaytarish uzilishlarsiz bajariladi. Aks holda
  * shell (dastur yuklayotganda) va boshqa jarayon (sbrk) bir vaqtda bitta
  * frame ni olib qo'yishi mumkin edi (race condition).
- *
- * v0.10: HAR BIR FRAME NING HISOBLAGICHI (reference count)
- * fork() dan keyin ota va bola bitta fizik frame ni BIRGALIKDA ishlatadi
- * (copy-on-write, paging.c). Frame ni kim bo'shatishi kerak? Oxirgi foydalanuvchi.
- * Shuning uchun har frame uchun bitta bayt: nechta Page Table yozuvi unga ishora
- * qiladi. pmm_alloc_frame — 1, pmm_frame_ref — +1, pmm_free_frame — -1;
- * frame faqat 0 ga tushganda haqiqatan bo'sh bo'ladi.
- * 1 GB RAM = 262144 frame = 256 KB hisoblagich (16 vazifa uchun 1 bayt yetadi).
  */
 #include "memory.h"
 #include "kernel.h"
@@ -34,7 +26,6 @@
 #define MAX_REGIONS  32
 
 static uint32_t bitmap[MAX_FRAMES / 32];
-static uint8_t  refs[MAX_FRAMES];                 /* v0.10: frame nechta joyda ishlatilmoqda */
 static uint32_t total_frames = 0;
 static uint32_t used_frames  = 0;
 static uint32_t memory_top   = 0;
@@ -132,7 +123,6 @@ uint32_t pmm_alloc_frame(void)
         }
         if (!frame_test(f)) {
             frame_set(f);
-            refs[f] = 1;
             used_frames++;
             search_hint = f + 1;
             result = f * PAGE_SIZE;
@@ -143,55 +133,17 @@ uint32_t pmm_alloc_frame(void)
     return result;
 }
 
-/* Hisoblagichni kamaytirish; 0 ga tushsa — frame bo'sh. zero: oxirgi egasi bo'lsak,
-   bo'shatishdan oldin nol bilan tozalash (bo'linmas: boshqa egasi bilan "poyga" bo'lmasin) */
-static void unref(uint32_t addr, bool zero)
+void pmm_free_frame(uint32_t addr)
 {
     uint32_t f = addr / PAGE_SIZE;
     uint32_t flags = irq_save();
     if (f < total_frames && frame_test(f)) {       /* allaqachon bo'sh bo'lsa — e'tiborsiz qoldiramiz */
-        if (refs[f] > 1) {
-            refs[f]--;                             /* boshqa jarayon hali ishlatyapti */
-        } else {
-            if (zero)
-                memset((void *)(f * PAGE_SIZE), 0, PAGE_SIZE);   /* identity-map: fizik = virtual */
-            refs[f] = 0;
-            frame_clear(f);
-            used_frames--;
-            if (f < search_hint)
-                search_hint = f;
-        }
+        frame_clear(f);
+        used_frames--;
+        if (f < search_hint)
+            search_hint = f;
     }
     irq_restore(flags);
-}
-
-void pmm_free_frame(uint32_t addr)      { unref(addr, false); }
-void pmm_free_frame_zero(uint32_t addr) { unref(addr, true); }
-
-/* fork: frame endi yana bitta jarayonda (copy-on-write) */
-void pmm_frame_ref(uint32_t addr)
-{
-    uint32_t f = addr / PAGE_SIZE;
-    uint32_t flags = irq_save();
-    if (f < total_frames && frame_test(f) && refs[f] < 255)
-        refs[f]++;
-    irq_restore(flags);
-}
-
-uint32_t pmm_frame_refs(uint32_t addr)
-{
-    uint32_t f = addr / PAGE_SIZE;
-    return f < total_frames ? refs[f] : 0;
-}
-
-/* Bir nechta jarayon birga ishlatayotgan frame lar soni (mem buyrug'i uchun) */
-uint32_t pmm_shared_frames(void)
-{
-    uint32_t n = 0;
-    for (uint32_t f = 0; f < total_frames; f++)
-        if (refs[f] > 1)
-            n++;
-    return n;
 }
 
 uint32_t pmm_total_frames(void)  { return total_frames; }
