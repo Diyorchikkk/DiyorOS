@@ -21,7 +21,7 @@
 
 #define VFS_NAME_MAX   32
 #define VFS_PATH_MAX   256
-#define VFS_MAX_FDS    32
+#define VFS_MAX_FILES  64             /* v0.10: tizimdagi ochiq fayllar ("open file description") */
 #define VFS_FILE_MAX   (1024 * 1024)   /* bitta fayl maksimum 1 MB */
 
 /* Xato kodlari (manfiy sonlar) */
@@ -107,14 +107,29 @@ typedef struct vfs_node {
 #define VFS_O_TRUNC   0x08   /* ochishda mazmunni o'chirish */
 #define VFS_O_APPEND  0x10   /* oxiriga yozish */
 
-typedef struct {
-    vfs_node_t *node;        /* 0 — bo'sh */
-    uint32_t    offset;      /* joriy o'qish/yozish joyi */
+/*
+ * v0.10: UCH QATLAM (Unix dagidek)
+ *
+ *   jarayon A: fd[0] fd[1] fd[3] ...  \                         (task_t.fd — har jarayonniki)
+ *   jarayon B: fd[0] fd[1] ...         -->  ochiq fayl yozuvi   (vfs_file_t — umumiy jadval)
+ *                                               offset, flags, refs
+ *                                                   |
+ *                                              fayl tuguni (vfs_node_t) yoki pipe
+ *
+ * fd — jarayon jadvalidagi tartib raqam (0, 1, 2, 3...). Ikki jarayonning "fd 3"
+ * i har xil fayl bo'lishi mumkin. fork() va dup() yozuvni NUSXALAMAYDI, unga
+ * yana bitta havola qo'shadi (refs + 1): pozitsiya (offset) umumiy bo'ladi —
+ * "dastur > log" da ota va bola bir-birining ustidan yozmaydi.
+ * Yozuv oxirgi havola yopilganda (refs = 0) bo'shaydi.
+ */
+typedef struct vfs_file {
+    vfs_node_t *node;        /* fayl (pipe bo'lsa — 0) */
+    uint32_t    offset;      /* joriy o'qish/yozish joyi — barcha havolalar uchun bitta */
     uint32_t    flags;
-    uint32_t    owner;       /* qaysi jarayon ochgan (PID) — boshqasi ishlata olmaydi */
-    struct pipe *pipe;       /* v0.8: fayl emas, pipe ning bir uchi (node = 0) */
+    uint32_t    refs;        /* nechta deskriptor shu yozuvga ishora qiladi (0 — bo'sh) */
+    struct pipe *pipe;       /* v0.8: fayl emas, pipe ning bir uchi */
     bool        pipe_write;  /* true — yozish uchi, false — o'qish uchi */
-} vfs_fd_t;
+} vfs_file_t;
 
 /* Ishga tushirish */
 void        vfs_init(void);
@@ -127,7 +142,7 @@ int         vfs_mkmountpoint(const char *path);   /* ulanmagan paytda ichiga yoz
 /* Yo'llar */
 int         vfs_lookup(const char *path, vfs_node_t **out);
 int         vfs_get_path(vfs_node_t *node, char *buf, uint32_t size);
-int         vfs_chdir(const char *path);
+int         vfs_chdir(const char *path);     /* v0.10: joriy VAZIFANING papkasi */
 vfs_node_t *vfs_cwd(void);
 const char *vfs_basename(const char *path);
 
@@ -139,23 +154,31 @@ int         vfs_rename(const char *from, const char *to);
 vfs_node_t *vfs_readdir(vfs_node_t *dir, uint32_t index);
 void        vfs_touch_time(vfs_node_t *n);
 
-/* Fayl deskriptorlari */
+/* Fayl deskriptorlari — JORIY vazifaning jadvalida (v0.10) */
 int         vfs_open(const char *path, uint32_t flags);
 int32_t     vfs_read(int fd, void *buf, uint32_t len);
 int32_t     vfs_write(int fd, const void *buf, uint32_t len);
 int         vfs_seek(int fd, uint32_t offset);
 int         vfs_close(int fd);
-const vfs_fd_t *vfs_fd_info(int fd);
-bool        vfs_fd_owned(int fd, uint32_t pid);
-void        vfs_close_owner(uint32_t pid);   /* jarayon tugaganda uning fayllarini yopish */
-int         vfs_fd_count(uint32_t pid);      /* jarayon ochgan fayllar soni */
 
 /* v0.8 */
 int         vfs_pipe(int fds[2]);            /* fds[0] — o'qish, fds[1] — yozish uchi */
-int         vfs_dup(int fd, uint32_t owner); /* xuddi shu fayl/pipe ga yangi deskriptor */
-void        vfs_fd_set_owner(int fd, uint32_t pid);
 void        vfs_lock(void);                  /* VFS va fayl tizimlarining umumiy (rekursiv) qulfi */
 void        vfs_unlock(void);
+
+/* v0.10: deskriptor jadvallari. FD_FREE (-1) — bo'sh, FD_CONSOLE (-2) — klaviatura/ekran,
+   >= 0 — ochiq fayl yozuvining raqami */
+#define FD_FREE      (-1)
+#define FD_CONSOLE   (-2)
+int         vfs_dup(int fd);                 /* eng kichik bo'sh raqamga nusxa (umumiy offset) */
+int         vfs_dup2(int fd, int to);        /* "to" ni yopib, unga fd ning nusxasini qo'yish */
+int         vfs_fd_kind(int fd);             /* FD_CONSOLE, 0 — fayl, 1 — pipe, VFS_EBADF */
+void        vfs_fdt_init(int16_t *table);    /* yangi jadval: 0, 1, 2 — konsol */
+int         vfs_fdt_inherit(int16_t *dst, int slot, int fd);   /* joriy jadvaldagi fd ni dst[slot] ga */
+void        vfs_fdt_copy(int16_t *dst);      /* fork: joriy jadvalning to'liq nusxasi */
+void        vfs_fdt_close_all(int16_t *table);
+int         vfs_files_used(void);            /* tizimdagi band ochiq fayl yozuvlari (fds buyrug'i) */
+int         vfs_fd_report(char *buf, uint32_t size);   /* fds buyrug'i va /proc/fds */
 
 const char *vfs_strerror(int err);
 

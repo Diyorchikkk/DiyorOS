@@ -63,7 +63,7 @@ OBJS     := $(patsubst src/%.s,$(BUILD)/%.o,$(ASM_SRC)) \
             $(BUILD)/initrd.o
 
 # ---- User dasturlar (v0.5) ----
-USER_PROGS   := hello guess primes hack isolate kundalik pi mandel ilon wc grep sanoq ota head
+USER_PROGS   := hello guess primes hack isolate kundalik pi mandel ilon wc grep sanoq ota head nusxa qobiq
 USER_BINS    := $(addprefix $(BUILD)/user/,$(USER_PROGS))
 USER_LIB     := $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/ugfx.o $(BUILD)/user/font.o
 USER_CFLAGS  := $(ARCH_C) -std=gnu99 -ffreestanding -O2 -Wall -Wextra \

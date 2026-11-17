@@ -1221,3 +1221,14 @@ int gui_sys_close(int id)
     wm_unlock();
     return win ? 0 : -2;
 }
+
+/* v0.10: exec — eski dasturning oynalari yangi dasturga meros qolmaydi */
+void gui_sys_close_all(void)
+{
+    wm_lock();
+    uint32_t pid = task_current()->pid;
+    for (int i = 0; running && i < MAX_WINDOWS; i++)
+        if (windows[i].used && windows[i].owner == pid)
+            wm_destroy(&windows[i]);
+    wm_unlock();
+}
