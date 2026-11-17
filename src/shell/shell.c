@@ -629,6 +629,7 @@ static const command_t commands[] = {
     { "translate", CAT_MEMORY,  "Virtual -> fizik: translate 0xD0000000",          cmd_translate },
 
     { "ps",        CAT_TASKS,   "Vazifalar ro'yxati va CPU ulushi",                cmd_ps        },
+    { "fds",       CAT_TASKS,   "Deskriptor jadvallari: jarayon fd -> ochiq fayl (v0.10)", cmd_fds   },
     { "spawn",     CAT_TASKS,   "Fon vazifasi: spawn spinner | primes | busy",     cmd_spawn     },
     { "kill",      CAT_TASKS,   "Vazifani to'xtatish: kill 3",                     cmd_kill      },
     { "sched",     CAT_TASKS,   "Scheduler statistikasi",                          cmd_sched     },
@@ -1114,27 +1115,23 @@ static void run_pipeline(char *line)
     }
 
     task_reap();
-    uint32_t me = task_current()->pid;
     int32_t pids[PIPE_STAGES] = { 0 };
     uint32_t pgid = 0;
     bool failed = false;
     for (int i = builtin ? 1 : 0; i < count && !failed; i++) {
+        /* v0.10: bola shell deskriptorlarining nusxasini oladi (havola +1); shell o'z
+           uchlarini pastda o'zi yopadi — Unix dagi fork + dup2 + close bilan bir xil */
         spawn_opts_t o = { .fd_in = -1, .fd_out = -1, .pgid = pgid, .foreground = true };
         if (i > 0)
-            o.fd_in = vfs_dup(pr[i - 1], me);      /* nusxa: muvaffaqiyatda bolaga o'tadi */
+            o.fd_in = pr[i - 1];
         else if (in_fd >= 0)
-            o.fd_in = vfs_dup(in_fd, me);
+            o.fd_in = in_fd;
         if (i < count - 1)
-            o.fd_out = vfs_dup(pw[i], me);
+            o.fd_out = pw[i];
         else if (out_fd >= 0)
-            o.fd_out = vfs_dup(out_fd, me);
-        int32_t pid = (o.fd_in < -1 || o.fd_out < -1) ? VFS_EMFILE
-                                                      : process_spawn_ex(paths[i], args[i], &o);
+            o.fd_out = out_fd;
+        int32_t pid = process_spawn_ex(paths[i], args[i], &o);
         if (pid < 0) {
-            if (o.fd_in >= 0)
-                vfs_close(o.fd_in);
-            if (o.fd_out >= 0)
-                vfs_close(o.fd_out);
             vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
             kprintf("%s: %s\n", stage[i], process_strerror(pid));
             normal();
@@ -1213,6 +1210,7 @@ static void run_pipeline(char *line)
 /* Fonda ishlagan dasturlar tugagan bo'lsa — xabar berib, xotirasini bo'shatish */
 static void report_finished(void)
 {
+    int interrupted = 0;
     for (int i = 0; i < MAX_TASKS; i++) {
         task_t *t = task_get(i);
         if (t->state != TASK_ZOMBIE || !t->user || t->pid == task_foreground())
@@ -1220,13 +1218,21 @@ static void report_finished(void)
         task_t *parent = task_find(t->parent_pid);
         if (parent && parent->user && parent->state != TASK_ZOMBIE)
             continue;                        /* v0.8: bu bolani otasi o'zi wait() bilan yig'adi */
-        /* TTIN da xabar allaqachon chiqqan; KILLED — oynasi yopilgan grafik dastur */
-        if (t->exit_code != EXIT_TTIN && t->exit_code != EXIT_KILLED) {
+        /* TTIN da xabar allaqachon chiqqan; KILLED — oynasi yopilgan grafik dastur;
+           CTRL_C — oldingi plandagi guruhning fork qilingan a'zolari (v0.10): bittalab emas, soni */
+        if (t->exit_code == EXIT_CTRL_C) {
+            interrupted++;
+        } else if (t->exit_code != EXIT_TTIN && t->exit_code != EXIT_KILLED) {
             vga_set_color(VGA_DARK_GREY, VGA_BLACK);
             kprintf("[PID %u] %s tugadi (kod %d)\n", t->pid, t->name, t->exit_code);
             normal();
         }
         task_reap_pid(t->pid);
+    }
+    if (interrupted) {
+        vga_set_color(VGA_DARK_GREY, VGA_BLACK);
+        kprintf("[%d ta jarayon Ctrl+C bilan to'xtatildi]\n", interrupted);
+        normal();
     }
     task_reap();                             /* tugagan kernel oqimlari (masalan, oyna menejeri) */
 }

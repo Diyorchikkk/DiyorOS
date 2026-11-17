@@ -15,6 +15,7 @@
    PID qaytaradi (> 0) yoki xato kodi (< 0) */
 int32_t     process_spawn(const char *path, const char *args);
 int32_t     process_spawn_ex(const char *path, const char *args, const spawn_opts_t *opts);  /* v0.8 */
+int32_t     process_exec(registers_t *r, const char *path, const char *args);   /* v0.10: faqat xatoda qaytadi */
 const char *process_strerror(int32_t err);
 
 /* Dastur xatoga yo'l qo'yganda (ring 3 dagi exception): faqat jarayon o'ladi */

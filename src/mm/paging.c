@@ -36,6 +36,23 @@
  *     Ikki dastur bir xil virtual manzilni ishlatsa ham, ular har xil
  *     fizik frame larga tushadi — bir-birining xotirasini ko'ra olmaydi.
  *   - Jarayon almashganda CR3 registriga uning Page Directory si yoziladi.
+ *
+ * v0.10: COPY-ON-WRITE (CoW) — fork() ning asosi
+ *   fork() jarayonning NUSXASINI yaratadi. To'g'ridan-to'g'ri yo'l — barcha
+ *   sahifalarni nusxalash: 1 MB lik dastur uchun 256 ta frame va ko'p vaqt.
+ *   Ko'pincha bola darhol exec() qiladi va bu nusxa bekorga ketadi.
+ *   Yechim — "yozilganda nusxalash":
+ *     1. fork: bola ota bilan BIR XIL frame larni oladi (faqat Page Table lar
+ *        yangi). Yoziladigan har bir sahifa IKKALASIDA HAM "faqat o'qish" qilinadi
+ *        va PAGE_COW belgisi qo'yiladi; frame hisoblagichi (pmm.c) +1.
+ *     2. Kimdir shu sahifaga yozmoqchi bo'lsa — protsessor Page Fault beradi
+ *        (sahifa bor, lekin faqat o'qish uchun). paging_cow_fault:
+ *          - frame ni boshqa hech kim ishlatmasa — shunchaki yozishga ochamiz;
+ *          - aks holda yangi frame ajratib, 4 KB ni nusxalaymiz va yozuvni
+ *            yangi frame ga o'tkazamiz. Eski frame hisoblagichi -1.
+ *     3. Buyruq qaytadan bajariladi — endi muvaffaqiyatli. Dastur hech narsa sezmaydi.
+ *   Natija: fork bir zumda bajariladi, xotira faqat haqiqatan o'zgargan sahifalar
+ *   uchun sarflanadi. Linux, BSD, Windows (fork emulatsiyasi) shunday ishlaydi.
  */
 #include "memory.h"
 #include "string.h"
@@ -43,10 +60,13 @@
 #include "klog.h"
 #include "cpu.h"
 #include "fb.h"
+#include "irq.h"
 
 static uint32_t *kernel_directory = 0;
 static uint32_t *current_directory = 0;
 static uint32_t identity_limit = 0;
+static uint32_t cow_copies = 0;      /* v0.10: CoW tufayli nusxalangan sahifalar */
+static uint32_t cow_reused = 0;      /* ...nusxa kerak bo'lmagan (oxirgi egasi) holatlar */
 
 static inline void invlpg(uint32_t addr)
 {
@@ -216,6 +236,9 @@ uint32_t *paging_create_directory(void)
 /*
  * Jarayon tugaganda: uning barcha user sahifalari, Page Table lari va directory si.
  *
+ * v0.10: frame boshqa jarayon bilan umumiy (fork, CoW) bo'lsa — faqat hisoblagich
+ * kamayadi, frame o'sha jarayonda qoladi. Oxirgi egasi chiqqanda bo'shatiladi.
+ *
  * v0.9: har bir sahifa bo'shatishdan oldin NOL bilan tozalanadi:
  *   1) xavfsizlik — frame keyingi egasiga (boshqa jarayon yoki kernel) oldingi
  *      jarayonning ma'lumotini (parollar, fayl mazmuni) ko'rsatmasligi kerak;
@@ -233,13 +256,132 @@ void paging_free_directory(uint32_t *dir)
             continue;
         uint32_t *table = (uint32_t *)(dir[i] & ~0xFFFu);
         for (int j = 0; j < 1024; j++)
-            if (table[j] & PAGE_PRESENT) {
-                memset((void *)(table[j] & ~0xFFFu), 0, PAGE_SIZE);   /* identity-map: fizik = virtual */
-                pmm_free_frame(table[j] & ~0xFFFu);
-            }
+            if (table[j] & PAGE_PRESENT)
+                pmm_free_frame_zero(table[j] & ~0xFFFu);   /* oxirgi egasi bo'lsak — tozalab bo'shatadi */
         pmm_free_frame((uint32_t)table);
     }
     pmm_free_frame((uint32_t)dir);
+}
+
+/* ------------------------- fork va copy-on-write (v0.10) ------------------------- */
+
+/* TLB ni to'liq tozalash: CR3 ni qayta yozish. Joriy jarayonning ko'p yozuvi o'zgarganda */
+void paging_flush_tlb(void)
+{
+    uint32_t cr3;
+    __asm__ volatile ("mov %%cr3, %0; mov %0, %%cr3" : "=r"(cr3) : : "memory");
+}
+
+/*
+ * Ota jarayon xotirasining copy-on-write nusxasi (fork). Bola uchun yangi Page
+ * Directory va yangi Page Table lar yaratiladi, lekin ular OTANING frame lariga
+ * ishora qiladi. Ikkala tomonda ham yoziladigan sahifalar "faqat o'qish + CoW".
+ * Xotira yetmasa — 0 (ota xotirasi buzilmaydi: CoW belgisi qolgan sahifalar
+ * birinchi yozishda shunchaki qayta ochiladi).
+ */
+uint32_t *paging_fork_directory(uint32_t *src)
+{
+    uint32_t *dir = paging_create_directory();
+    if (!dir)
+        return 0;
+    for (uint32_t i = USER_BASE >> 22; i < (USER_TOP >> 22); i++) {
+        if (!(src[i] & PAGE_PRESENT))
+            continue;
+        uint32_t *table = (uint32_t *)pmm_alloc_frame();
+        if (!table) {
+            paging_free_directory(dir);
+            if (src == current_directory)
+                paging_flush_tlb();
+            return 0;
+        }
+        uint32_t *from = (uint32_t *)(src[i] & ~0xFFFu);
+        /* Jadval bo'linmas nusxalanadi: shu payt boshqa jarayon (aka-uka) umumiy
+           frame da CoW ni hal qilib, hisoblagichni o'zgartirishi mumkin */
+        uint32_t flags = irq_save();
+        for (int j = 0; j < 1024; j++) {
+            uint32_t e = from[j];
+            if (e & PAGE_PRESENT) {
+                if (e & PAGE_RW) {
+                    e = (e & ~(uint32_t)PAGE_RW) | PAGE_COW;
+                    from[j] = e;                   /* ota ham endi yozganda nusxa oladi */
+                }
+                pmm_frame_ref(e & ~0xFFFu);
+            }
+            table[j] = e;
+        }
+        irq_restore(flags);
+        dir[i] = (uint32_t)table | (src[i] & 0xFFF);
+    }
+    if (src == current_directory)
+        paging_flush_tlb();                        /* otaning eski "yozish mumkin" yozuvlari TLB da qolmasin */
+    return dir;
+}
+
+/*
+ * Page Fault: sahifa bor, lekin faqat o'qish uchun va dastur yozmoqchi. Bu CoW
+ * sahifami? Bo'lsa — nusxa olamiz (yoki oxirgi egasi bo'lsak — shunchaki ochamiz).
+ * Qaytaradi: 1 — hal qilindi (buyruq qayta bajariladi), 0 — CoW emas (haqiqiy
+ * xato), -1 — nusxa uchun xotira yo'q.
+ */
+int paging_cow_fault(uint32_t *dir, uint32_t virt)
+{
+    if (!dir || dir == kernel_directory || virt < USER_BASE || virt >= USER_TOP)
+        return 0;
+    uint32_t flags = irq_save();
+    uint32_t *table = get_table(dir, virt, false, 0);
+    uint32_t idx = (virt >> 12) & 0x3FF;
+    if (!table || !(table[idx] & PAGE_PRESENT) || !(table[idx] & PAGE_COW)) {
+        irq_restore(flags);
+        return 0;
+    }
+    uint32_t e = table[idx];
+    uint32_t frame = e & ~0xFFFu;
+    uint32_t keep = (e & 0xFFF & ~(uint32_t)PAGE_COW) | PAGE_RW;
+    if (pmm_frame_refs(frame) <= 1) {
+        table[idx] = frame | keep;                 /* qolgan yagona egasi — nusxa shart emas */
+        cow_reused++;
+    } else {
+        uint32_t copy = pmm_alloc_frame();
+        if (!copy) {
+            irq_restore(flags);
+            return -1;
+        }
+        memcpy((void *)copy, (const void *)frame, PAGE_SIZE);
+        table[idx] = copy | keep;
+        pmm_free_frame(frame);                     /* hisoblagich -1: frame boshqasida qoladi */
+        cow_copies++;
+    }
+    if (dir == current_directory)
+        invlpg(virt & ~0xFFFu);
+    irq_restore(flags);
+    return 1;
+}
+
+void paging_cow_stats(uint32_t *copies, uint32_t *reused)
+{
+    *copies = cow_copies;
+    *reused = cow_reused;
+}
+
+/*
+ * Kernel dastur xotirasiga yozishidan OLDIN (read() buferi, wait() natijasi):
+ * oraliqdagi CoW sahifalarni oldindan ajratib qo'yamiz. Aks holda kernel o'zi
+ * Page Fault ga tushardi. Xotira yetmasa — false.
+ */
+bool paging_make_writable(uint32_t *dir, uint32_t virt, uint32_t len)
+{
+    if (len == 0)
+        return true;
+    uint32_t end = virt + len;
+    if (end < virt)
+        return false;
+    for (uint32_t page = virt & ~0xFFFu; page < end; page += PAGE_SIZE) {
+        if (paging_cow_fault(dir, page) < 0)
+            return false;
+        if (page + PAGE_SIZE < page)
+            break;
+    }
+    return true;
 }
 
 /* dir dagi [virt, virt+len) oralig'idagi har bir sahifa mavjud va kerakli ruxsatga egami */

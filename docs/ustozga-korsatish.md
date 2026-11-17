@@ -5,7 +5,7 @@ ko'rsatiladi; grafik rejim — oxirida. Adashsangiz: `clear`, dastur qotsa: **Ct
 
 | № | Buyruq | Nima deyish kerak (1–2 gap) |
 |---|---|---|
-| 1 | (yuklanish ekrani) | "Bu o'zim yozgan OS: C va assembler, 17 ming qator. Har bir `[ OK ]` — alohida qism: xotira, uzilishlar, drayverlar, fayl tizimi, scheduler." |
+| 1 | (yuklanish ekrani) | "Bu o'zim yozgan OS: C va assembler, 20 ming qator. Har bir `[ OK ]` — alohida qism: xotira, uzilishlar, drayverlar, fayl tizimi, scheduler." |
 | 2 | `ps`, `spawn busy`, `ps`, `kill 2` | "Multitasking preemptive: `busy` cheksiz tsiklda, lekin shell ishlayapti — taymer har 50 ms da vazifani majburan almashtiradi (Round-Robin)." |
 | 3 | `hello` | "Bu dastur ring 3 da, o'z manzil fazosida ishlaydi. Kernel bilan faqat `int 0x80` syscall orqali gaplashadi." |
 | 4 | `hack 2`, `hack 5` | "Dastur kernel xotirasiga yozmoqchi bo'ldi, keyin uzilishlarni o'chirmoqchi (`cli`) — protsessor ruxsat bermadi, kernel faqat shu dasturni o'ldirdi. Tizim ishlayapti." |
@@ -18,10 +18,12 @@ ko'rsatiladi; grafik rejim — oxirida. Adashsangiz: `clear`, dastur qotsa: **Ct
 | 11 | `sanoq 100000000 \| grep 7 \| wc`, 2 soniyadan keyin **Ctrl+C**, `ps` | "Uchta dastur parallel ishlayapti. Ctrl+C butun guruhni to'xtatdi — `ps` da hech narsa qolmadi." |
 | 12 | `sanoq 3000 > /disk/son.txt`, `wc < /disk/son.txt` | "Chiqish diskdagi faylga (FAT32) yo'naltirildi. Dastur buni bilmaydi — u oddiy `write(1)` qiladi." |
 | 13 | `cat /proc/sync` | "Hamma qulflarning statistikasi: necha marta olingan, necha marta kutilgan, nechta deadlock aniqlangan." |
-| 14 | `gui` | "Grafik rejim: oyna menejeri, sichqoncha, Fayllar, Tizim monitori, Mandelbrot (ring 3 da, FPU bilan)." |
-| 15 | `crash stack` (eng oxirida!) | "Kernelning o'zida xato bo'lsa — toza panic ekrani: sabab, registrlar, backtrace. Tizim jim qotib qolmaydi." |
+| 14 | `nusxa` | "`fork` jarayonni ikkiga bo'ladi. 1 MB massiv fork da nusxalanmadi (16 KB ketdi) — sahifalar faqat bola yozganda ko'chirildi: copy-on-write. Oxirida bola `exec` bilan boshqa dasturga aylandi." |
+| 15 | `qobiq`, `primes 100 \| wc`, `cd /bin`, `exit`, `pwd` | "Bu shell — oddiy dastur (ring 3). Buyruqlarni Unix kabi ishga tushiradi: fork, dup2, exec, wait. Uning `cd` si kernel shell papkasini o'zgartirmaydi — papka har jarayonniki." |
+| 16 | `gui` | "Grafik rejim: oyna menejeri, sichqoncha, Fayllar, Tizim monitori, Mandelbrot (ring 3 da, FPU bilan)." |
+| 17 | `crash stack` (eng oxirida!) | "Kernelning o'zida xato bo'lsa — toza panic ekrani: sabab, registrlar, backtrace. Tizim jim qotib qolmaydi." |
 
-Vaqt kam bo'lsa: 1, 2, 4, 5, 7, 9, 11, 14.
+Vaqt kam bo'lsa: 1, 2, 4, 5, 7, 9, 11, 14, 15, 16.
 
 2-qadamdagi `kill 2`: `busy` ning PID ini `ps` dan qarang (odatda 2).
 
@@ -48,16 +50,18 @@ ulaydi, `ls` chiqishini yozish uchiga yozadi va o'z uchlarini **yopadi**. Yozuvc
 `wc` `read` dan 0 oladi (EOF) va natijani chiqaradi. Bufer to'lsa yozuvchi, bo'sh bo'lsa
 o'quvchi uxlaydi.
 
-**5. Nega `fork` emas, `spawn`? Zombi nima?**
-`fork` butun jarayonni nusxalaydi — buning uchun copy-on-write kerak, u qilinmagan. `spawn`
-dasturni bir qadamda yuklaydi (Windows `CreateProcess`, POSIX `posix_spawn` kabi). Zombi —
-tugagan, lekin chiqish kodi hali o'qilmagan jarayon; otasi `wait()` qilganda tozalanadi.
+**5. `fork` qanday ishlaydi va nega u tez? Zombi nima?**
+Bolaning kernel stekiga otaning syscall kadri ko'chiriladi (faqat `EAX = 0`) — shuning uchun
+fork ikki marta qaytadi. Xotira nusxalanmaydi: ikkala jarayon bir xil frame larni "faqat o'qish"
+holatida oladi, kimdir yozsa Page Fault keladi va kernel faqat o'sha sahifani ko'chiradi
+(copy-on-write). Zombi — tugagan, lekin chiqish kodi hali o'qilmagan jarayon; otasi `wait()`
+qilganda tozalanadi.
 
 ## Halol javoblar ("bu yo'q" deyishdan qo'rqmang)
 
 - Bitta protsessor; SMP yo'q. Ustuvorliklar yo'q (faqat Round-Robin).
 - Deadlock faqat mutexlar orasida aniqlanadi (kanal yoki semafor orqali emas).
-- `fork`, `exec`, signal ishlov beruvchilari, swap, tarmoq — yo'q.
+- Signal ishlov beruvchilari, swap, tarmoq, USB — yo'q.
 - Haqiqiy kompyuterda hali sinalmagan — faqat QEMU (bu v1.0 rejasida).
 
 Batafsil savol-javoblar: har bir `docs/v0.X-*.md` faylining oxirida.

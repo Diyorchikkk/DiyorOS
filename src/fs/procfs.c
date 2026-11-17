@@ -163,6 +163,12 @@ static int gen_sync(char *b, uint32_t n)
     return len;
 }
 
+/* v0.10: deskriptor jadvallari (fds buyrug'i bilan bir xil) */
+static int gen_fds(char *b, uint32_t n)
+{
+    return vfs_fd_report(b, n);
+}
+
 /* ------------------------------ Fayl tizimi ------------------------------ */
 
 static const vfs_ops_t procfs_ops;
@@ -170,6 +176,7 @@ static const vfs_ops_t procfs_ops;
 static vfs_node_t proc_root;
 static vfs_node_t proc_files[] = {
     { .name = "cpuinfo",    .generate = gen_cpuinfo    },
+    { .name = "fds",        .generate = gen_fds        },
     { .name = "interrupts", .generate = gen_interrupts },
     { .name = "kmsg",       .generate = gen_kmsg       },
     { .name = "meminfo", .generate = gen_meminfo },

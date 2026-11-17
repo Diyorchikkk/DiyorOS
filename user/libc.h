@@ -41,9 +41,17 @@ int      win_close(int id);
 
 /* Jarayonlar va kanallar (v0.8) */
 int      spawn(const char *path, const char *args, const int io[2]); /* bola PID; io: {stdin, stdout}, -1 — meros, 0 — hammasi meros */
-int      wait(int pid, int *code);                                   /* bola tugashini kutish */
+int      wait(int pid, int *code);                                   /* bola tugashini kutish; pid 0 — istalgani. Bola PID */
 int      pipe(int fds[2]);                                           /* fds[0] — o'qish, fds[1] — yozish */
 int      isatty(int fd);                                             /* 1 — klaviatura/ekran, 0 — kanal */
+
+/* Unix jarayon modeli (v0.10) */
+int      fork(void);                              /* otada — bola PID, bolada — 0, xato — manfiy */
+int      exec(const char *path, const char *args);/* dasturni almashtirish; faqat xatoda qaytadi */
+int      dup(int fd);                             /* fd nusxasi (eng kichik bo'sh raqam) */
+int      dup2(int fd, int to);                    /* "to" ni fd ning nusxasiga aylantirish */
+int      chdir(const char *path);                 /* shu jarayonning joriy papkasi */
+int      getcwd(char *buf, int size);             /* joriy papka; uzunlik yoki xato */
 
 /* Maxsus tugmalar (GUI_EV_KEY dagi key) */
 #define KEY_UP     0x11

@@ -3,12 +3,17 @@
  *
  * Vazifalari:
  *   1. Yo'llarni tahlil qilish: "/home/diyorbek/../etc/./motd" -> fayl tuguni
- *   2. Joriy papka (cwd): nisbiy yo'llar shu yerdan hisoblanadi
+ *   2. Joriy papka (cwd): nisbiy yo'llar shu yerdan hisoblanadi.
+ *      v0.10: har VAZIFANING o'z joriy papkasi (task_t.cwd) — dastur "cd" qilsa,
+ *      shell ning papkasi o'zgarmaydi
  *   3. Mount: bir fayl tizimini boshqasining papkasiga "ulash"
  *      (masalan, procfs -> /proc). Yo'l bo'ylab yurganda mount nuqtasiga
  *      yetsak, ulangan fayl tizimining ildiziga o'tamiz.
  *   4. Fayl deskriptorlari (fd): ochilgan fayllar jadvali. Har bir fd
  *      qaysi faylga va uning qaysi joyiga (offset) ishora qilishini saqlaydi.
+ *      v0.10: ikki qatlam — har vazifaning deskriptor jadvali (task_t.fd) va
+ *      tizimning umumiy "ochiq fayllar" jadvali (files[], havolalar soni bilan).
+ *      vfs.h dagi rasmga qarang.
  *
  * VFS o'zi ma'lumot saqlamaydi: haqiqiy ish node->ops orqali fayl
  * tizimiga (ramfs, procfs, fat32) topshiriladi.
@@ -46,8 +51,9 @@
 #define MAX_MOUNTS 8
 
 static vfs_node_t *root = 0;
-static vfs_node_t *cwd = 0;
-static vfs_fd_t    fds[VFS_MAX_FDS];
+static vfs_node_t *boot_cwd = 0;              /* scheduler ishga tushmasdan oldingi joriy papka */
+static vfs_file_t  files[VFS_MAX_FILES];      /* v0.10: umumiy ochiq fayllar jadvali */
+static int16_t     boot_fdt[TASK_MAX_FDS];    /* yuklanish paytidagi deskriptor jadvali */
 static mutex_t     vfs_mutex;
 static bool        vfs_mutex_ready = false;
 
@@ -72,7 +78,27 @@ void vfs_unlock(void)
     mutex_unlock(&vfs_mutex);
 }
 
-#define FD_USED(f) ((f).node || (f).pipe)
+/* Joriy vazifaning deskriptor jadvali va papkasi (yuklanishda — vaqtinchalik) */
+static int16_t *cur_fdt(void)
+{
+    return sched_active() ? task_current()->fd : boot_fdt;
+}
+
+static vfs_node_t *cur_cwd(void)
+{
+    if (!sched_active())
+        return boot_cwd;
+    task_t *t = task_current();
+    return t->cwd ? t->cwd : root;
+}
+
+static void set_cwd(vfs_node_t *n)
+{
+    if (sched_active())
+        task_current()->cwd = n;
+    else
+        boot_cwd = n;
+}
 
 static struct {
     char        path[VFS_PATH_MAX];
@@ -135,7 +161,7 @@ static int lookup_locked(const char *path, vfs_node_t **out)
         path = expanded;
     }
 
-    vfs_node_t *node = (path[0] == '/') ? root : cwd;
+    vfs_node_t *node = (path[0] == '/') ? root : cur_cwd();
     char part[VFS_NAME_MAX];
 
     while (*path) {
@@ -195,7 +221,7 @@ static int split_parent(const char *path, vfs_node_t **dir, char *name)
     const char *base;
     int err;
     if (!slash) {
-        *dir = cwd;
+        *dir = cur_cwd();
         base = buf;
         err = VFS_OK;
     } else {
@@ -260,21 +286,35 @@ static bool is_ancestor(vfs_node_t *a, vfs_node_t *b)
     return false;
 }
 
+/* v0.10: biror tirik vazifaning joriy papkasi n ichidami? (o'chirish / uzishdan oldin) */
+static bool cwd_inside(vfs_node_t *n)
+{
+    if (!sched_active())
+        return boot_cwd && is_ancestor(n, boot_cwd);
+    for (int i = 0; i < MAX_TASKS; i++) {
+        task_t *t = task_get(i);
+        if (t->state != TASK_UNUSED && t->state != TASK_ZOMBIE && is_ancestor(n, t->cwd ? t->cwd : root))
+            return true;
+    }
+    return false;
+}
+
 /* --------------------------------- Ildiz ---------------------------------- */
 
 void vfs_init(void)
 {
     root = ramfs_create_root();
     root->parent = root;
-    cwd = root;
-    memset(fds, 0, sizeof(fds));
+    boot_cwd = root;
+    memset(files, 0, sizeof(files));
+    vfs_fdt_init(boot_fdt);
     strcpy(mounts[0].path, "/");
     mounts[0].fs_root = root;
     mount_count = 1;
 }
 
 vfs_node_t *vfs_root(void) { return root; }
-vfs_node_t *vfs_cwd(void)  { return cwd; }
+vfs_node_t *vfs_cwd(void)  { return cur_cwd(); }
 
 /* fs_root ni path papkasiga ulash */
 static int mount_locked(const char *path, vfs_node_t *fs_root)
@@ -313,14 +353,10 @@ static int unmount_locked(const char *path)
     if (idx < 0)
         return VFS_EINVAL;                  /* bu yerga hech narsa ulanmagan */
 
-    for (vfs_node_t *n = cwd; ; n = n->parent) {   /* joriy papka shu fayl tizimidami? */
-        if (n == dir)
-            return VFS_EBUSY;
-        if (n == root || !n->parent)
-            break;
-    }
-    for (int i = 0; i < VFS_MAX_FDS; i++)
-        if (fds[i].node && fds[i].node->ops == dir->ops)
+    if (cwd_inside(dir))
+        return VFS_EBUSY;                   /* biror vazifaning joriy papkasi shu fayl tizimida */
+    for (int i = 0; i < VFS_MAX_FILES; i++)
+        if (files[i].refs && files[i].node && files[i].node->ops == dir->ops)
             return VFS_EBUSY;               /* ochiq fayllar bor */
 
     /* Mount nuqtasini topib, ulanishni olib tashlaymiz */
@@ -363,7 +399,7 @@ static int chdir_locked(const char *path)
         return err;
     if (n->type != VFS_DIR)
         return VFS_ENOTDIR;
-    cwd = n;
+    set_cwd(n);
     return VFS_OK;
 }
 
@@ -424,8 +460,8 @@ static int remove_node(vfs_node_t *n, bool recursive)
     for (int i = 0; i < mount_count; i++)
         if (mounts[i].fs_root == n)
             return VFS_EBUSY;                /* ulangan fayl tizimining ildizi */
-    if (is_ancestor(n, cwd))
-        return VFS_EBUSY;                    /* joriy papka yoki uning otasi */
+    if (cwd_inside(n))
+        return VFS_EBUSY;                    /* biror vazifaning joriy papkasi yoki uning otasi */
     if (n->open_count)
         return VFS_EBUSY;                    /* fayl ochiq */
 
@@ -499,25 +535,47 @@ static int rename_locked(const char *from, const char *to)
 
 /* --------------------------- Fayl deskriptorlari --------------------------- */
 
-static vfs_fd_t *get_fd(int fd)
+/* Joriy vazifaning fd raqami -> ochiq fayl yozuvi (konsol yoki bo'sh bo'lsa — 0) */
+static vfs_file_t *get_fd(int fd)
 {
-    if (fd < 0 || fd >= VFS_MAX_FDS || !FD_USED(fds[fd]))
+    if (fd < 0 || fd >= TASK_MAX_FDS)
         return 0;
-    return &fds[fd];
+    int e = cur_fdt()[fd];
+    return e >= 0 ? &files[e] : 0;
 }
 
-/* 0, 1, 2 an'anaviy ravishda stdin, stdout, stderr uchun — 3 dan boshlaymiz */
-static int alloc_fd(void)
+/* Jadvaldagi eng kichik bo'sh raqam (Unix qoidasi: close(1); open(...) -> 1 bo'ladi) */
+static int alloc_slot(const int16_t *t)
 {
-    for (int i = 3; i < VFS_MAX_FDS; i++)
-        if (!FD_USED(fds[i]))
+    for (int i = 0; i < TASK_MAX_FDS; i++)
+        if (t[i] == FD_FREE)
             return i;
     return -1;
 }
 
-static uint32_t current_pid(void)
+static int alloc_file(void)
 {
-    return sched_active() ? task_current()->pid : 1;
+    for (int i = 0; i < VFS_MAX_FILES; i++)
+        if (!files[i].refs)
+            return i;
+    return -1;
+}
+
+/* Ochiq fayl yozuviga bitta havola kamaydi. Oxirgisi bo'lsa — fayl haqiqatan yopiladi */
+static void file_put(int idx)
+{
+    vfs_file_t *f = &files[idx];
+    if (!f->refs || --f->refs)
+        return;
+    if (f->pipe) {
+        pipe_t *p = f->pipe;
+        bool w = f->pipe_write;
+        f->pipe = 0;
+        pipe_close(p, w);                    /* yozuvchi qolmasa — o'quvchi EOF ko'radi */
+    } else if (f->node) {
+        f->node->open_count--;
+        f->node = 0;
+    }
 }
 
 static int open_locked(const char *path, uint32_t flags)
@@ -536,8 +594,9 @@ static int open_locked(const char *path, uint32_t flags)
     if ((flags & VFS_O_WRITE) && !n->ops->write)
         return VFS_EROFS;
 
-    int fd = alloc_fd();
-    if (fd < 0)
+    int16_t *t = cur_fdt();
+    int fd = alloc_slot(t), idx = alloc_file();
+    if (fd < 0 || idx < 0)
         return VFS_EMFILE;
 
     if ((flags & VFS_O_TRUNC) && (flags & VFS_O_WRITE) && n->ops->truncate) {
@@ -546,18 +605,16 @@ static int open_locked(const char *path, uint32_t flags)
             return err;
     }
 
-    fds[fd].node   = n;
-    fds[fd].flags  = flags;
-    fds[fd].offset = (flags & VFS_O_APPEND) ? n->size : 0;
-    fds[fd].owner  = current_pid();
-    fds[fd].pipe   = 0;
+    files[idx] = (vfs_file_t){ .node = n, .flags = flags, .refs = 1,
+                               .offset = (flags & VFS_O_APPEND) ? n->size : 0 };
     n->open_count++;
+    t[fd] = (int16_t)idx;
     return fd;
 }
 
 static int32_t read_locked(int fd, void *buf, uint32_t len)
 {
-    vfs_fd_t *f = get_fd(fd);
+    vfs_file_t *f = get_fd(fd);
     if (!f || !(f->flags & VFS_O_READ) || f->pipe)
         return VFS_EBADF;
     if (!f->node->ops->read)
@@ -570,7 +627,7 @@ static int32_t read_locked(int fd, void *buf, uint32_t len)
 
 static int32_t write_locked(int fd, const void *buf, uint32_t len)
 {
-    vfs_fd_t *f = get_fd(fd);
+    vfs_file_t *f = get_fd(fd);
     if (!f || !(f->flags & VFS_O_WRITE) || f->pipe)
         return VFS_EBADF;
     if (f->flags & VFS_O_APPEND)
@@ -583,7 +640,7 @@ static int32_t write_locked(int fd, const void *buf, uint32_t len)
 
 static int seek_locked(int fd, uint32_t offset)
 {
-    vfs_fd_t *f = get_fd(fd);
+    vfs_file_t *f = get_fd(fd);
     if (!f)
         return VFS_EBADF;
     if (f->pipe)
@@ -594,83 +651,120 @@ static int seek_locked(int fd, uint32_t offset)
 
 static int close_locked(int fd)
 {
-    vfs_fd_t *f = get_fd(fd);
-    if (!f)
+    if (fd < 0 || fd >= TASK_MAX_FDS)
         return VFS_EBADF;
-    if (f->pipe) {
-        pipe_t *p = f->pipe;
-        bool w = f->pipe_write;
-        f->pipe = 0;
-        pipe_close(p, w);
-        return VFS_OK;
-    }
-    f->node->open_count--;
-    f->node = 0;
+    int16_t *t = cur_fdt();
+    int e = t[fd];
+    if (e == FD_FREE)
+        return VFS_EBADF;
+    t[fd] = FD_FREE;
+    if (e >= 0)
+        file_put(e);                         /* konsol bo'lsa — faqat jadvaldan olib tashlanadi */
     return VFS_OK;
 }
 
 static int pipe_locked(int out[2])
 {
-    int r = alloc_fd();
+    int16_t *t = cur_fdt();
+    int r = alloc_slot(t);
     if (r < 0)
         return VFS_EMFILE;
-    fds[r].pipe = (pipe_t *)1;               /* vaqtincha band — ikkinchi uch boshqa joy olsin */
-    int w = alloc_fd();
-    fds[r].pipe = 0;
-    if (w < 0)
+    t[r] = 0;                                /* vaqtincha band — ikkinchi uch boshqa joy olsin */
+    int w = alloc_slot(t);
+    t[r] = FD_FREE;
+    int ri = alloc_file();
+    if (ri >= 0)
+        files[ri].refs = 1;                  /* xuddi shunday — vaqtincha band */
+    int wi = alloc_file();
+    if (ri >= 0)
+        files[ri].refs = 0;
+    if (w < 0 || ri < 0 || wi < 0)
         return VFS_EMFILE;
     pipe_t *p = pipe_create();
     if (!p)
         return VFS_ENOMEM;
-    uint32_t pid = current_pid();
-    fds[r] = (vfs_fd_t){ .node = 0, .offset = 0, .flags = VFS_O_READ,  .owner = pid, .pipe = p, .pipe_write = false };
-    fds[w] = (vfs_fd_t){ .node = 0, .offset = 0, .flags = VFS_O_WRITE, .owner = pid, .pipe = p, .pipe_write = true };
+    files[ri] = (vfs_file_t){ .flags = VFS_O_READ,  .refs = 1, .pipe = p, .pipe_write = false };
+    files[wi] = (vfs_file_t){ .flags = VFS_O_WRITE, .refs = 1, .pipe = p, .pipe_write = true };
+    t[r] = (int16_t)ri;
+    t[w] = (int16_t)wi;
     out[0] = r;
     out[1] = w;
     return VFS_OK;
 }
 
-static int dup_locked(int fd, uint32_t owner)
+/*
+ * dup: fd ning NUSXASI — xuddi o'sha ochiq fayl yozuviga yana bitta havola.
+ * Pozitsiya umumiy: biri 10 bayt yozsa, ikkinchisi 11-baytdan davom etadi.
+ * Shell "dastur > fayl 2>&1" ni shu bilan qiladi.
+ */
+static int dup_to(int16_t *t, int fd, int to)
 {
-    vfs_fd_t *f = get_fd(fd);
-    if (!f)
+    int e = t[fd];
+    if (to != fd) {
+        if (t[to] >= 0)
+            file_put(t[to]);                 /* dup2: eski "to" yopiladi */
+        t[to] = (int16_t)e;
+        if (e >= 0)
+            files[e].refs++;
+    }
+    return to;
+}
+
+static int dup_locked(int fd)
+{
+    int16_t *t = cur_fdt();
+    if (fd < 0 || fd >= TASK_MAX_FDS || t[fd] == FD_FREE)
         return VFS_EBADF;
-    int nfd = alloc_fd();
-    if (nfd < 0)
+    int to = alloc_slot(t);
+    if (to < 0)
         return VFS_EMFILE;
-    /*
-     * Faylga yozadigan deskriptor nusxalansa (ota va bola bitta faylga yozadi:
-     * "ota > log"), ikkalasi ham "oxiriga qo'shish" rejimiga o'tadi. Aks holda har
-     * birining o'z pozitsiyasi bo'lib, bola otaning yozganlari ustidan yozib yuborardi.
-     * (Unix da buning uchun nusxalar bitta umumiy pozitsiyani bo'lishadi.)
-     */
-    if (f->node && (f->flags & VFS_O_WRITE))
-        f->flags |= VFS_O_APPEND;
-    fds[nfd] = *f;
-    fds[nfd].owner = owner;
-    if (f->pipe)
-        pipe_ref(f->pipe, f->pipe_write);
-    else
-        f->node->open_count++;
-    return nfd;
+    return dup_to(t, fd, to);
 }
 
-const vfs_fd_t *vfs_fd_info(int fd)
+static int dup2_locked(int fd, int to)
 {
-    return get_fd(fd);
+    int16_t *t = cur_fdt();
+    if (fd < 0 || fd >= TASK_MAX_FDS || t[fd] == FD_FREE || to < 0 || to >= TASK_MAX_FDS)
+        return VFS_EBADF;
+    return dup_to(t, fd, to);
 }
 
-bool vfs_fd_owned(int fd, uint32_t pid)
+/* Yangi jadval: 0 (stdin), 1 (stdout), 2 (stderr) — konsol, qolgani bo'sh */
+void vfs_fdt_init(int16_t *table)
 {
-    vfs_fd_t *f = get_fd(fd);
-    return f && f->owner == pid;
+    for (int i = 0; i < TASK_MAX_FDS; i++)
+        table[i] = i < 3 ? FD_CONSOLE : FD_FREE;
 }
 
-static void close_owner_locked(uint32_t pid)
+static int fdt_inherit_locked(int16_t *dst, int slot, int fd)
 {
-    for (int i = 0; i < VFS_MAX_FDS; i++)
-        if (FD_USED(fds[i]) && fds[i].owner == pid)
-            close_locked(i);
+    const int16_t *t = cur_fdt();
+    if (fd < 0 || fd >= TASK_MAX_FDS || t[fd] == FD_FREE || slot < 0 || slot >= TASK_MAX_FDS)
+        return VFS_EBADF;
+    dst[slot] = t[fd];
+    if (t[fd] >= 0)
+        files[t[fd]].refs++;
+    return VFS_OK;
+}
+
+static void fdt_copy_locked(int16_t *dst)
+{
+    const int16_t *t = cur_fdt();
+    for (int i = 0; i < TASK_MAX_FDS; i++) {
+        dst[i] = t[i];
+        if (t[i] >= 0)
+            files[t[i]].refs++;
+    }
+}
+
+static void fdt_close_all_locked(int16_t *table)
+{
+    for (int i = 0; i < TASK_MAX_FDS; i++) {
+        int e = table[i];
+        table[i] = FD_FREE;
+        if (e >= 0)
+            file_put(e);
+    }
 }
 
 /* ----------------------- Ochiq funksiyalar: kritik seksiya ----------------------- */
@@ -741,15 +835,16 @@ int vfs_open(const char *path, uint32_t flags)
 }
 
 /*
- * Kanal deskriptori bo'lsa — pipe ni qaytaradi. VFS qulfi olinmaydi: deskriptorni
- * faqat EGASI ishlatadi va faqat egasi yopadi (shu yerda tekshiriladi), demak
- * jadvaldagi bu yozuv biz ishlayotganda o'zgarmaydi. Shu tufayli kanal orqali
- * ma'lumot almashish diskka yozayotgan boshqa vazifani (vfs qulfini) kutmaydi.
+ * Kanal deskriptori bo'lsa — pipe ni qaytaradi. VFS qulfi olinmaydi: deskriptor
+ * JORIY vazifaning jadvalida, uni faqat shu vazifa o'zgartiradi; jadvaldagi havola
+ * turgan ekan, ochiq fayl yozuvi (refs > 0) va undagi pipe bo'shab qolmaydi.
+ * Shu tufayli kanal orqali ma'lumot almashish diskka yozayotgan boshqa vazifani
+ * (vfs qulfini) kutmaydi.
  */
 static pipe_t *fd_pipe(int fd, uint32_t need_flag)
 {
-    vfs_fd_t *f = get_fd(fd);
-    if (!f || !f->pipe || !(f->flags & need_flag) || f->owner != current_pid())
+    vfs_file_t *f = get_fd(fd);
+    if (!f || !f->pipe || !(f->flags & need_flag))
         return 0;
     return f->pipe;
 }
@@ -775,17 +870,96 @@ int vfs_pipe(int out[2])
     VFS_CALL(int, pipe_locked(out));
 }
 
-int vfs_dup(int fd, uint32_t owner)
+int vfs_dup(int fd)
 {
-    VFS_CALL(int, dup_locked(fd, owner));
+    VFS_CALL(int, dup_locked(fd));
 }
 
-/* Deskriptorni boshqa jarayonga berish (spawn: bolaning stdin/stdout i).
-   Bitta so'z yoziladi — qulfsiz, uzilishlar o'chiq holda ham chaqirsa bo'ladi */
-void vfs_fd_set_owner(int fd, uint32_t pid)
+int vfs_dup2(int fd, int to)
 {
-    if (fd >= 0 && fd < VFS_MAX_FDS && FD_USED(fds[fd]))
-        fds[fd].owner = pid;
+    VFS_CALL(int, dup2_locked(fd, to));
+}
+
+int vfs_fdt_inherit(int16_t *dst, int slot, int fd)
+{
+    VFS_CALL(int, fdt_inherit_locked(dst, slot, fd));
+}
+
+void vfs_fdt_copy(int16_t *dst)
+{
+    vfs_lock();
+    fdt_copy_locked(dst);
+    vfs_unlock();
+}
+
+void vfs_fdt_close_all(int16_t *table)
+{
+    vfs_lock();
+    fdt_close_all_locked(table);
+    vfs_unlock();
+}
+
+/* Deskriptor turi: konsol, fayl yoki kanal (syscall lar uchun) */
+int vfs_fd_kind(int fd)
+{
+    if (fd < 0 || fd >= TASK_MAX_FDS)
+        return VFS_EBADF;
+    int e = cur_fdt()[fd];
+    if (e == FD_CONSOLE)
+        return FD_CONSOLE;
+    if (e < 0)
+        return VFS_EBADF;
+    return files[e].pipe ? 1 : 0;
+}
+
+int vfs_files_used(void)
+{
+    int n = 0;
+    for (int i = 0; i < VFS_MAX_FILES; i++)
+        if (files[i].refs)
+            n++;
+    return n;
+}
+
+/*
+ * v0.10: uch qatlamni ko'rsatish (fds buyrug'i, /proc/fds):
+ *   har jarayonning jadvali (fd -> #yozuv) va umumiy jadval (#yozuv -> fayl, offset, havolalar).
+ */
+int vfs_fd_report(char *b, uint32_t n)
+{
+    vfs_lock();
+    int len = ksnprintf(b, n, "Jarayonlar jadvallari (fd -> #ochiq fayl, kon - klaviatura/ekran):\n");
+    for (int i = 0; i < MAX_TASKS; i++) {
+        task_t *t = task_get(i);
+        if (t->state == TASK_UNUSED || t->state == TASK_ZOMBIE || t->pid == 0)
+            continue;
+        len += ksnprintf(b + len, len < (int)n ? n - len : 0, "%3u %-10s", t->pid, t->name);
+        for (int fd = 0; fd < TASK_MAX_FDS; fd++) {
+            int e = t->fd[fd];
+            if (e == FD_CONSOLE)
+                len += ksnprintf(b + len, len < (int)n ? n - len : 0, " %d:kon", fd);
+            else if (e >= 0)
+                len += ksnprintf(b + len, len < (int)n ? n - len : 0, " %d:#%d", fd, e);
+        }
+        len += ksnprintf(b + len, len < (int)n ? n - len : 0, "\n");
+    }
+    len += ksnprintf(b + len, len < (int)n ? n - len : 0,
+                     "Umumiy jadval (%d / %d band):\n  #  HAVOLA  OFFSET  NIMA\n",
+                     vfs_files_used(), VFS_MAX_FILES);
+    for (int i = 0; i < VFS_MAX_FILES; i++) {
+        vfs_file_t *f = &files[i];
+        if (!f->refs)
+            continue;
+        char what[VFS_PATH_MAX];
+        if (f->pipe)
+            ksnprintf(what, sizeof(what), "kanal %u, %s uchi", f->pipe->id, f->pipe_write ? "yozish" : "o'qish");
+        else if (get_path_locked(f->node, what, sizeof(what)))
+            strlcpy(what, f->node->name, sizeof(what));
+        len += ksnprintf(b + len, len < (int)n ? n - len : 0, "%3d  %5u  %6u  %s\n",
+                         i, f->refs, f->offset, what);
+    }
+    vfs_unlock();
+    return len;
 }
 
 int vfs_seek(int fd, uint32_t offset)
@@ -798,24 +972,6 @@ int vfs_close(int fd)
     VFS_CALL(int, close_locked(fd));
 }
 
-void vfs_close_owner(uint32_t pid)
-{
-    vfs_lock();
-    close_owner_locked(pid);
-    vfs_unlock();
-}
-
-/* pid jarayoni nechta fayl ochgan (har bir dasturga chegara qo'yish uchun) */
-int vfs_fd_count(uint32_t pid)
-{
-    vfs_lock();
-    int count = 0;
-    for (int i = 0; i < VFS_MAX_FDS; i++)
-        if (FD_USED(fds[i]) && fds[i].owner == pid)
-            count++;
-    vfs_unlock();
-    return count;
-}
 
 const char *vfs_strerror(int err)
 {

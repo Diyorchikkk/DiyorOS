@@ -24,9 +24,10 @@ typedef struct pipe {
 } pipe_t;
 
 pipe_t  *pipe_create(void);                                  /* readers = writers = 1 */
+/* v0.10: dup/fork pipe uchini emas, ochiq fayl yozuvini bo'lishadi (vfs.c: refs) —
+   shuning uchun har uchda readers/writers doim 1, yozuv oxirgi havola bilan yopiladi */
 int32_t  pipe_read(pipe_t *p, void *buf, uint32_t len);      /* > 0, 0 (EOF), VFS_EINTR */
 int32_t  pipe_write(pipe_t *p, const void *buf, uint32_t len); /* len, VFS_EPIPE, VFS_EINTR */
-void     pipe_ref(pipe_t *p, bool write_end);                /* uchini nusxalash (dup) */
 void     pipe_close(pipe_t *p, bool write_end);              /* oxirgisi yopilsa — bo'shatiladi */
 int      pipe_report(char *buf, uint32_t size);              /* /proc/sync uchun */
 

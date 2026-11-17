@@ -42,6 +42,8 @@ initrd_table:
     ENTRY sanoq
     ENTRY ota
     ENTRY head
+    ENTRY nusxa
+    ENTRY qobiq
     .long 0, 0, 0              # ro'yxat oxiri
 
     BLOB hello
@@ -58,5 +60,7 @@ initrd_table:
     BLOB sanoq
     BLOB ota
     BLOB head
+    BLOB nusxa
+    BLOB qobiq
 
 .section .note.GNU-stack, "", @progbits

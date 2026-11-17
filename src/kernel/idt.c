@@ -22,6 +22,7 @@
 #include "kprintf.h"
 #include "task.h"
 #include "process.h"
+#include "memory.h"
 #include "klog.h"
 #include <stdbool.h>
 
@@ -162,6 +163,19 @@ registers_t *interrupt_handler(registers_t *r)
     if (r->int_no < 32) {
         if (r->int_no == 7 && fpu_handle_nm(r))
             return r;                          /* FPU holati almashtirildi — dastur davom etadi */
+        /* v0.10: sahifa bor, lekin faqat o'qish uchun va yozishga urinildi (xato kodi:
+           bit 0 — sahifa mavjud, bit 1 — yozish). Bu copy-on-write bo'lishi mumkin */
+        if (r->int_no == 14 && (r->err_code & 3) == 3) {
+            uint32_t cr2;
+            __asm__ volatile ("mov %%cr2, %0" : "=r"(cr2));
+            int cow = paging_cow_fault(paging_current_directory(), cr2);
+            if (cow > 0)
+                return r;                      /* nusxa olindi — buyruq qaytadan bajariladi */
+            if (cow < 0 && (r->cs & 3) == 3) {
+                process_fault(r, "xotira yetmadi (copy-on-write nusxasi)");
+                return sched_maybe_switch(r);
+            }
+        }
         if ((r->cs & 3) == 3) {                /* xato dasturda (ring 3) — faqat u o'ladi */
             process_fault(r, exception_names[r->int_no]);
             return sched_maybe_switch(r);

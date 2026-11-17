@@ -107,16 +107,6 @@ int32_t pipe_write(pipe_t *p, const void *buf, uint32_t len)
     return (int32_t)done;
 }
 
-void pipe_ref(pipe_t *p, bool write_end)
-{
-    uint32_t f = irq_save();
-    if (write_end)
-        p->writers++;
-    else
-        p->readers++;
-    irq_restore(f);
-}
-
 void pipe_close(pipe_t *p, bool write_end)
 {
     uint32_t f = irq_save();

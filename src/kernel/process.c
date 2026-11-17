@@ -10,6 +10,12 @@
  *      Kod segmenti faqat O'QISH uchun — dastur o'z kodini buzolmaydi.
  *   5. Stek (64 KB) 0xC0000000 dan pastda ajratiladi, unga argc/argv yoziladi.
  *   6. Ring 3 vazifa yaratiladi — scheduler uni navbat bilan ishga tushiradi.
+ *
+ * v0.10: 1-5 qadamlar bitta funksiyada (load_image). Uni ikki yo'l ishlatadi:
+ *   spawn — YANGI jarayon (6-qadam);
+ *   exec  — JORIY jarayonning xotirasi almashtiriladi (task_exec), PID o'sha.
+ * Yangi dastur avval to'liq yuklanadi va faqat shundan keyin eskisi o'chiriladi:
+ * exec xato bilan tugasa (fayl yo'q, ELF buzilgan), chaqirgan dastur ishlayveradi.
  */
 #include "process.h"
 #include "elf.h"
@@ -21,6 +27,7 @@
 #include "vga.h"
 #include "klog.h"
 #include "irq.h"
+#include "gui.h"
 
 #define MAX_ARGS      16
 #define EXEC_MAX      (1024 * 1024)
@@ -227,12 +234,13 @@ int32_t process_spawn(const char *path, const char *args)
     return process_spawn_ex(path, args, 0);
 }
 
-/*
- * v0.8: opts — standart kirish/chiqish (pipe uchun) va jarayon guruhi.
- * opts->fd_in / fd_out deskriptorlari bolaga TOPSHIRILADI (egasi o'zgaradi):
- * muvaffaqiyatda ular bolaga tegishli bo'lib qoladi, xatoda — chaqiruvchida.
- */
-int32_t process_spawn_ex(const char *path, const char *args, const spawn_opts_t *opts)
+typedef struct {
+    uint32_t *dir;
+    uint32_t  entry, esp, brk, pages;
+} image_t;
+
+/* 1-5. Faylni o'qish, alohida xotira, segmentlar, stek. Muvaffaqiyatda img->dir — tayyor xotira */
+static int32_t load_image(const char *path, const char *args, image_t *img)
 {
     uint8_t *file;
     uint32_t got;
@@ -240,7 +248,6 @@ int32_t process_spawn_ex(const char *path, const char *args, const spawn_opts_t 
     if (err)
         return err;
 
-    /* 2-5. Alohida xotira, segmentlar, stek */
     uint32_t *dir = paging_create_directory();
     if (!dir) {
         kfree(file);
@@ -252,24 +259,59 @@ int32_t process_spawn_ex(const char *path, const char *args, const spawn_opts_t 
 
     if (!result && !map_user_range(dir, USER_STACK_TOP - USER_STACK_SIZE, USER_STACK_TOP, true, &pages))
         result = PROC_ENOMEM;
-
-    const char *name = vfs_basename(path);
     if (!result)
-        result = setup_stack(dir, name, args, &esp);
-
+        result = setup_stack(dir, vfs_basename(path), args, &esp);
     if (result) {
         paging_free_directory(dir);
         return result;
     }
+    *img = (image_t){ .dir = dir, .entry = entry, .esp = esp, .brk = page_up(image_end), .pages = pages };
+    return 0;
+}
+
+/*
+ * v0.8: opts — standart kirish/chiqish (pipe uchun) va jarayon guruhi.
+ * v0.10: opts->fd_in / fd_out — chaqiruvchining deskriptorlari; bola ularning
+ * nusxasini oladi (havola +1), chaqiruvchi o'zinikini keyin o'zi yopadi.
+ */
+int32_t process_spawn_ex(const char *path, const char *args, const spawn_opts_t *opts)
+{
+    if (opts && ((opts->fd_in >= 0 && vfs_fd_kind(opts->fd_in) == VFS_EBADF) ||
+                 (opts->fd_out >= 0 && vfs_fd_kind(opts->fd_out) == VFS_EBADF)))
+        return VFS_EBADF;
+
+    image_t img;
+    int32_t err = load_image(path, args, &img);
+    if (err)
+        return err;
 
     /* 6. Ring 3 vazifa */
-    uint32_t pid = task_create_user(name, dir, entry, esp, page_up(image_end), pages, opts);
+    uint32_t pid = task_create_user(vfs_basename(path), img.dir, img.entry, img.esp,
+                                    img.brk, img.pages, opts);
     if (!pid) {
-        paging_free_directory(dir);
+        paging_free_directory(img.dir);
         return PROC_ETASKS;
     }
-    klog("exec: PID %u %s (%u sahifa, entry 0x%x)", pid, path, pages, entry);
+    klog("exec: PID %u %s (%u sahifa, entry 0x%x)", pid, path, img.pages, img.entry);
     return (int32_t)pid;
+}
+
+/*
+ * v0.10: exec — joriy jarayon (syscall ichida) yangi dasturga aylanadi.
+ * Faqat xato bo'lsa qaytadi (manfiy kod); muvaffaqiyatda r shunday o'zgaradiki,
+ * syscall dan qaytish yangi dasturning entry nuqtasiga olib boradi.
+ */
+int32_t process_exec(registers_t *r, const char *path, const char *args)
+{
+    image_t img;
+    int32_t err = load_image(path, args, &img);
+    if (err)
+        return err;
+    task_t *t = task_current();
+    klog("exec: PID %u %s -> %s (%u sahifa)", t->pid, t->name, path, img.pages);
+    gui_sys_close_all();                      /* eski dasturning oynalari */
+    task_exec(r, vfs_basename(path), img.dir, img.entry, img.esp, img.brk, img.pages);
+    return 0;
 }
 
 const char *process_strerror(int32_t err)

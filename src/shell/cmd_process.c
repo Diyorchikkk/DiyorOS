@@ -22,6 +22,8 @@
 #include "drivers.h"
 #include "string.h"
 #include "config.h"
+#include "memory.h"
+#include "vfs.h"
 #include "sync.h"
 #include "gui.h"
 
@@ -187,6 +189,20 @@ static uint8_t state_color(task_state_t s)
     }
 }
 
+/* v0.10: deskriptor jadvallarining uch qatlami */
+void cmd_fds(const char *args)
+{
+    (void)args;
+    char *buf = kmalloc(4096);
+    if (!buf) {
+        kprintf("fds: xotira yetmadi\n");
+        return;
+    }
+    vfs_fd_report(buf, 4096);
+    kprintf("%s", buf);
+    kfree(buf);
+}
+
 void cmd_ps(const char *args)
 {
     (void)args;
@@ -194,7 +210,7 @@ void cmd_ps(const char *args)
     uint8_t old = vga_get_color();
 
     vga_set_color(VGA_WHITE, VGA_BLACK);
-    kprintf("PID  T  %-10s%-12s CPU%%  XOTIRA  ALMASH  IZOH\n", "NOMI", "HOLAT");
+    kprintf("PID OTA  T  %-10s%-12s CPU%%  XOTIRA  ALMASH  IZOH\n", "NOMI", "HOLAT");
     vga_set_color(old & 0x0F, old >> 4);
 
     int count = 0;
@@ -203,7 +219,7 @@ void cmd_ps(const char *args)
         if (t->state == TASK_UNUSED)
             continue;
         count++;
-        kprintf("%3u  %c  %-10s", t->pid, t->user ? 'U' : 'K', t->name);
+        kprintf("%3u %3u  %c  %-10s", t->pid, t->parent_pid, t->user ? 'U' : 'K', t->name);
         vga_set_color(state_color(t->state), VGA_BLACK);
         kprintf("%-12s", state_name(t->state));
         vga_set_color(old & 0x0F, old >> 4);
@@ -222,7 +238,8 @@ void cmd_ps(const char *args)
         }
         kprintf("%4u%% %5u KB %7u  %s\n", t->cpu_percent, kb, t->switches, note);
     }
-    kprintf("Jami: %d ta vazifa (maksimum %d).  T: K - kernel oqimi, U - user dastur\n", count, MAX_TASKS);
+    kprintf("Jami: %d ta vazifa (maks. %d). OTA - otasi; T: K - kernel oqimi, U - user\n",
+            count, MAX_TASKS);
 }
 
 void cmd_spawn(const char *args)

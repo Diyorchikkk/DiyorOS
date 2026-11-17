@@ -16,6 +16,7 @@ void cmd_pagefault(const char *args);
 
 /* cmd_process.c */
 void cmd_ps(const char *args);
+void cmd_fds(const char *args);
 void cmd_spawn(const char *args);
 void cmd_kill(const char *args);
 void cmd_sched(const char *args);

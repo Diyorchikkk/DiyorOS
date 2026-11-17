@@ -101,6 +101,7 @@ int  gui_sys_create(const char *title, int w, int h);
 int  gui_sys_update(int id, const uint32_t *pixels);
 int  gui_sys_event(int id, struct gui_event *ev);
 int  gui_sys_close(int id);
+void gui_sys_close_all(void);              /* v0.10: joriy jarayonning barcha oynalari (exec) */
 bool gui_sys_window_size(int id, int *w, int *h);
 
 #endif

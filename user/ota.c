@@ -7,10 +7,9 @@
  *                   4 KB — to'lganda ota uxlaydi, wc o'qigach davom etadi), keyin
  *                   yozish uchini yopadi: wc EOF ni ko'rib natijani chiqaradi.
  *
- * Unix da bu fork() + exec() + wait() + pipe() bilan qilinadi. DiyorOS da
- * fork yo'q (butun xotirani nusxalash kerak bo'lardi): spawn() bitta qadamda
- * yangi dasturni yuklaydi — Windows dagi CreateProcess va POSIX posix_spawn
- * kabi.
+ * spawn() bitta qadamda yangi dasturni yuklaydi — Windows dagi CreateProcess va
+ * POSIX posix_spawn kabi. v0.10 dan boshlab Unix usuli ham bor: fork() + exec()
+ * + wait() (nusxa va qobiq dasturlariga qarang).
  */
 #include "libc.h"
 

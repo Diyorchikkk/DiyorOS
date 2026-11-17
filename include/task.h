@@ -23,6 +23,8 @@
 #define TASK_NAME_LEN    16
 #define TASK_NOTE_LEN    32
 #define SCHED_QUANTUM    5        /* vaqt kvanti: 5 tick = 50 ms */
+#define TASK_MAX_FDS     16       /* v0.10: bitta jarayonning deskriptor jadvali */
+#define TASK_MAX_CHILDREN 4       /* bitta jarayonning bir vaqtdagi bolalari ("fork bomb" ga qarshi) */
 
 typedef enum {
     TASK_UNUSED = 0,   /* jadvaldagi bo'sh joy */
@@ -37,6 +39,7 @@ typedef void (*task_entry_t)(uint32_t arg);
 
 struct wait_queue;
 struct mutex;
+struct vfs_node;
 
 typedef struct task {
     uint32_t     pid;
@@ -78,12 +81,15 @@ typedef struct task {
     volatile bool      kill_pending;  /* to'xtatish so'ralgan: user rejimga qaytishda tugaydi */
     int32_t            kill_code;
 
-    /* v0.8: jarayon guruhi va standart kirish/chiqish */
+    /* v0.8: jarayon guruhi */
     uint32_t           pgid;          /* quvurdagi (a | b | c) barcha jarayonlar bitta guruhda */
-    int                fd_in;         /* stdin: -1 — klaviatura, aks holda VFS fd (pipe) */
-    int                fd_out;        /* stdout: -1 — ekran */
     uint8_t            color;         /* ekranga yozish rangi (setcolor) — har jarayonniki o'ziniki */
     bool               out_failed;    /* yo'naltirilgan stdout ga yozishda xato bo'lgan (xabar bir marta) */
+
+    /* v0.10: har jarayonning O'Z deskriptor jadvali va joriy papkasi */
+    int16_t            fd[TASK_MAX_FDS];   /* fd -> ochiq fayl yozuvi (vfs.h: FD_FREE, FD_CONSOLE) */
+    struct vfs_node   *cwd;               /* nisbiy yo'llar shu papkadan hisoblanadi */
+    uint32_t           forks;             /* fork() orqali yaratilgan (ps: IZOH) */
 } task_t;
 
 #define EXIT_KILLED   (-9)      /* kill buyrug'i bilan */
@@ -103,7 +109,9 @@ void     task_exit(void);                  /* joriy vazifani tugatish (kod 0) */
 void     task_exit_code(int32_t code);
 
 /* v0.5: user jarayonlar */
-/* v0.8: yangi jarayonning stdin/stdout va guruhi (0 / -1 — standart) */
+/* v0.8: yangi jarayonning stdin/stdout va guruhi.
+   v0.10: fd_in / fd_out — CHAQIRUVCHINING deskriptor raqamlari (-1 — uning fd 0 / fd 1 i
+   meros). Bola ularning nusxasini oladi; chaqiruvchi o'zinikini o'zi yopadi */
 typedef struct {
     int      fd_in;
     int      fd_out;
@@ -115,6 +123,11 @@ uint32_t task_create_user(const char *name, uint32_t *page_dir, uint32_t entry,
                           uint32_t user_esp, uint32_t brk, uint32_t pages,
                           const spawn_opts_t *opts);
 int32_t  task_wait(uint32_t pid);          /* jarayon tugashini kutish, chiqish kodini qaytaradi */
+int32_t  task_wait_child(int32_t pid, int32_t *code);   /* v0.10: pid <= 0 — istalgan bola; bola PID */
+int32_t  task_fork(registers_t *r);        /* v0.10: bola PID (otada), xato < 0 */
+void     task_exec(registers_t *r, const char *name, uint32_t *dir, uint32_t entry,
+                   uint32_t user_esp, uint32_t brk, uint32_t pages);
+int      task_count_children(uint32_t pid);
 void     task_signal_kill(uint32_t pid, int32_t code);   /* uzilish ichidan ham (Ctrl+C) */
 void     task_signal_group(uint32_t pgid, int32_t code); /* guruhdagi barcha jarayonlarga (v0.8) */
 bool     task_should_abort(void);          /* joriy user jarayonni to'xtatish so'ralganmi (v0.8) */

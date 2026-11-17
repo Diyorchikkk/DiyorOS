@@ -39,6 +39,15 @@
  *   - shundagina eski egasining holatini saqlab (fnsave), yangisinikini
  *     tiklaymiz (frstor) va dastur davom etadi.
  * Natija: FPU ishlatmaydigan dasturlar uchun xarajat nol.
+ *
+ * FORK VA EXEC (v0.10)
+ * Unix da yangi dastur ikki qadamda ishga tushadi:
+ *   fork()  — joriy jarayonning NUSXASI (xotira copy-on-write, deskriptorlar,
+ *             joriy papka). Ikkalasi ham fork() dan qaytadi: otada natija —
+ *             bolaning PID i, bolada — 0. Shu bilan ular qaysi biri ekanini biladi.
+ *   exec()  — jarayon o'z xotirasini YANGI dastur bilan almashtiradi. PID,
+ *             ota, deskriptorlar, papka saqlanadi — shuning uchun shell fork va
+ *             exec orasida bolaning stdin/stdout ini (dup2) qayta ulay oladi.
  */
 #include "task.h"
 #include "memory.h"
@@ -102,7 +111,8 @@ void sched_init(void)
     strcpy(shell_task->name, "shell");
     shell_task->state = TASK_RUNNING;
     shell_task->pgid = shell_task->pid;
-    shell_task->fd_in = shell_task->fd_out = -1;
+    vfs_fdt_init(shell_task->fd);                  /* 0, 1, 2 — klaviatura va ekran */
+    shell_task->cwd = vfs_cwd();                   /* rootfs o'rnatgan papka (/home/diyorbek) */
     shell_task->stack_guard = (uint32_t *)boot_stack_bottom;   /* boot.s dagi 16 KB stek */
     *shell_task->stack_guard = STACK_CANARY;
     current = shell_task;
@@ -142,7 +152,9 @@ uint32_t task_create(const char *name, task_entry_t entry, uint32_t arg)
     memset(t, 0, sizeof(*t));
     t->pid   = next_pid++;
     t->pgid  = t->pid;
-    t->fd_in = t->fd_out = -1;
+    t->parent_pid = active ? current->pid : 0;
+    vfs_fdt_init(t->fd);
+    t->cwd   = vfs_cwd();                          /* yaratgan vazifaning papkasi */
     strncpy(t->name, name, TASK_NAME_LEN - 1);
     t->stack = stack;
     t->stack_guard = (uint32_t *)stack;
@@ -183,6 +195,7 @@ static void reap(uint32_t only_pid)
         uint8_t *stack = 0;
         uint32_t *dir = 0;
         uint32_t pid = 0;
+        int16_t fdt[TASK_MAX_FDS];
         /* Otasi tirik user jarayon bo'lsa, zombini u o'zi wait() bilan yig'adi
            (chiqish kodini bilishi kerak). Ota o'lgach — shu yerda tozalanadi */
         task_t *parent = (!only_pid && t->state == TASK_ZOMBIE) ? task_find(t->parent_pid) : 0;
@@ -191,6 +204,8 @@ static void reap(uint32_t only_pid)
             stack = t->stack;
             dir = t->page_dir;
             pid = t->pid;
+            memcpy(fdt, t->fd, sizeof(fdt));  /* joy bo'shagach boshqa vazifa egallashi mumkin */
+            vfs_fdt_init(t->fd);
             t->stack = 0;
             t->page_dir = 0;
             t->state = TASK_UNUSED;
@@ -201,18 +216,22 @@ static void reap(uint32_t only_pid)
         if (dir)
             paging_free_directory(dir);       /* jarayonning butun xotirasi qaytariladi */
         if (pid)
-            vfs_close_owner(pid);             /* yopilmay qolgan fayllari */
+            vfs_fdt_close_all(fdt);           /* yopilmay qolgan fayllari (o'ldirilgan kernel oqimi) */
     }
 }
 
 void task_reap(void)             { reap(0); }
 void task_reap_pid(uint32_t pid) { if (pid) reap(pid); }
 
-/* Vazifani kutayotganlarni (task_wait) uyg'otish */
-static void wake_waiters(uint32_t pid)
+#define WAIT_ANY 0xFFFFFFFFu            /* v0.10: "istalgan bolam" ni kutish */
+
+/* Vazifani kutayotganlarni (task_wait) uyg'otish: aynan uni yoki otasi "istalgan bola" ni */
+static void wake_waiters(const task_t *dead)
 {
     for (int i = 0; i < MAX_TASKS; i++)
-        if (tasks[i].state == TASK_BLOCKED && tasks[i].wait_pid == pid) {
+        if (tasks[i].state == TASK_BLOCKED &&
+            (tasks[i].wait_pid == dead->pid ||
+             (tasks[i].wait_pid == WAIT_ANY && tasks[i].pid == dead->parent_pid))) {
             tasks[i].wait_pid = 0;
             task_unblock(&tasks[i]);
         }
@@ -226,7 +245,7 @@ static void make_zombie(task_t *t, int32_t code)
     if (fpu_owner == t)
         fpu_owner = 0;                 /* uning FPU holati endi hech kimga kerak emas */
     sync_task_died(t);                 /* navbatlardan chiqarish, ushlagan mutexlarini bo'shatish */
-    wake_waiters(t->pid);
+    wake_waiters(t);
     need_resched = true;
 }
 
@@ -349,8 +368,8 @@ void task_exit_code(int32_t code)
 {
     /* v0.8: jarayon fayl va kanallarini O'ZI yopadi — darhol. Masalan "ls | wc" da
        ls tugashi bilan wc EOF ni ko'radi (zombi tozalanishini kutmaydi) */
-    if (active && current->user)
-        vfs_close_owner(current->pid);
+    if (active)
+        vfs_fdt_close_all(current->fd);
     __asm__ volatile ("cli");
     make_zombie(current, code);
     task_yield();                      /* boshqa vazifaga o'tamiz va bu yerga qaytmaymiz */
@@ -391,6 +410,61 @@ int32_t task_wait(uint32_t pid)
     }
 }
 
+/*
+ * v0.10: bolani kutish (wait syscall). pid > 0 — aynan shu bola, pid <= 0 — istalgan
+ * bola (qaysi biri birinchi tugasa). Bola PID ini qaytaradi; bolasi yo'q bo'lsa — -1.
+ * Zombini tozalash chaqiruvchining ishi (task_reap_pid).
+ */
+int32_t task_wait_child(int32_t pid, int32_t *code)
+{
+    for (;;) {
+        uint32_t flags = irq_save();
+        bool any = false;
+        task_t *done = 0;
+        for (int i = 0; i < MAX_TASKS; i++) {
+            task_t *k = &tasks[i];
+            if (k->state == TASK_UNUSED || k == current || k->parent_pid != current->pid)
+                continue;
+            if (pid > 0 && k->pid != (uint32_t)pid)
+                continue;
+            any = true;
+            if (k->state == TASK_ZOMBIE) {
+                done = k;
+                break;
+            }
+        }
+        if (!any) {
+            irq_restore(flags);
+            return -1;                         /* kutadigan bola yo'q */
+        }
+        if (done) {
+            *code = done->exit_code;
+            int32_t cpid = (int32_t)done->pid;
+            irq_restore(flags);
+            return cpid;
+        }
+        if (task_should_abort()) {
+            irq_restore(flags);
+            return SYNC_EINTR;
+        }
+        current->wait_pid = pid > 0 ? (uint32_t)pid : WAIT_ANY;
+        current->wait_reason = "wait";
+        task_block();                          /* bola tugaganda make_zombie uyg'otadi */
+        current->wait_pid = 0;
+        current->wait_reason = 0;
+        irq_restore(flags);
+    }
+}
+
+int task_count_children(uint32_t pid)
+{
+    int n = 0;
+    for (int i = 0; i < MAX_TASKS; i++)
+        if (tasks[i].state != TASK_UNUSED && tasks[i].parent_pid == pid && tasks[i].pid != pid)
+            n++;
+    return n;
+}
+
 void task_set_foreground(uint32_t pid) { foreground_pid = pid; }
 uint32_t task_foreground(void)         { return foreground_pid; }
 
@@ -399,6 +473,17 @@ uint32_t task_foreground(void)         { return foreground_pid; }
  * safar segmentlar USER (ring 3) va useresp/ss ham bor — iret protsessorni
  * ring 3 ga, dasturning entry nuqtasiga va uning o'z stekiga o'tkazadi.
  */
+/* Bola uchun stdin/stdout/stderr: so'ralgan deskriptor yoki chaqiruvchining 0/1/2 i */
+static void child_stdio(int16_t *fdt, const spawn_opts_t *opts)
+{
+    for (int i = 0; i < TASK_MAX_FDS; i++)
+        fdt[i] = FD_FREE;
+    int want[3] = { opts && opts->fd_in >= 0 ? opts->fd_in : 0,
+                    opts && opts->fd_out >= 0 ? opts->fd_out : 1, 2 };
+    for (int i = 0; i < 3; i++)
+        vfs_fdt_inherit(fdt, i, want[i]);      /* chaqiruvchida yopiq bo'lsa — bolada ham yopiq */
+}
+
 uint32_t task_create_user(const char *name, uint32_t *page_dir, uint32_t entry,
                           uint32_t user_esp, uint32_t brk, uint32_t pages,
                           const spawn_opts_t *opts)
@@ -406,12 +491,15 @@ uint32_t task_create_user(const char *name, uint32_t *page_dir, uint32_t entry,
     uint8_t *stack = kmalloc(TASK_STACK_SIZE);   /* jarayonning KERNEL steki (syscall va uzilishlar uchun) */
     if (!stack)
         return 0;
+    int16_t fdt[TASK_MAX_FDS];
+    child_stdio(fdt, opts);                      /* VFS qulfi kerak — uzilishlar o'chirilishidan oldin */
 
     uint32_t flags = irq_save();
     task_t *t = alloc_slot();
     if (!t) {
         irq_restore(flags);
         kfree(stack);
+        vfs_fdt_close_all(fdt);
         return 0;
     }
     memset(t, 0, sizeof(*t));
@@ -426,13 +514,10 @@ uint32_t task_create_user(const char *name, uint32_t *page_dir, uint32_t entry,
     t->brk        = brk;
     t->user_pages = pages;
     t->parent_pid = current->pid;
-    t->fd_in      = (opts && opts->fd_in > 0) ? opts->fd_in : -1;
-    t->fd_out     = (opts && opts->fd_out > 0) ? opts->fd_out : -1;
     t->pgid       = (opts && opts->pgid) ? opts->pgid : t->pid;
     t->color      = 0x07;                      /* och kulrang, qora fonda */
-    /* stdin/stdout deskriptorlari endi bolaniki: u tugaganda ular yopiladi */
-    vfs_fd_set_owner(t->fd_in, t->pid);
-    vfs_fd_set_owner(t->fd_out, t->pid);
+    memcpy(t->fd, fdt, sizeof(fdt));
+    t->cwd        = current->cwd;              /* dastur shell turgan papkada ishlaydi */
     /* Oldingi plan — shu yerda, vazifa ishga tushishidan OLDIN (bo'linmas): aks holda
        dastur belgilanmasdan klaviaturadan o'qimoqchi bo'lib, "fon jarayoni" deb to'xtatilardi */
     if (opts && opts->foreground)
@@ -454,6 +539,129 @@ uint32_t task_create_user(const char *name, uint32_t *page_dir, uint32_t entry,
     uint32_t pid = t->pid;
     irq_restore(flags);
     return pid;
+}
+
+/*
+ * fork() — joriy user jarayonning nusxasi (v0.10).
+ *   r — syscall paytida otaning kernel stekiga saqlangan registrlar. Bolaning
+ *   kernel stekiga AYNAN shu kadr ko'chiriladi, faqat EAX = 0. Bola birinchi
+ *   marta ishga tushganda isr_common shu kadrni tiklaydi va iret bolani ham
+ *   "int 0x80 dan keyingi buyruqqa" qaytaradi — go'yo u ham fork() ni chaqirgan.
+ *   Xotira — copy-on-write (paging_fork_directory), deskriptorlar — havolalar +1.
+ * Otaga bola PID ini qaytaradi, xatoda manfiy son.
+ */
+int32_t task_fork(registers_t *r)
+{
+    if (!current->user)
+        return -1;
+    uint8_t *stack = kmalloc(TASK_STACK_SIZE);
+    if (!stack)
+        return -21;                                /* PROC_ENOMEM */
+    uint32_t *dir = paging_fork_directory(current->page_dir);
+    if (!dir) {
+        kfree(stack);
+        return -21;
+    }
+    int16_t fdt[TASK_MAX_FDS];
+    vfs_fdt_copy(fdt);                             /* ochiq fayllar va kanallar — umumiy */
+
+    uint32_t flags = irq_save();
+    task_t *t = alloc_slot();
+    if (!t) {
+        irq_restore(flags);
+        kfree(stack);
+        paging_free_directory(dir);
+        vfs_fdt_close_all(fdt);
+        return -22;                                /* PROC_ETASKS */
+    }
+    memset(t, 0, sizeof(*t));
+    t->pid         = next_pid++;
+    memcpy(t->name, current->name, TASK_NAME_LEN);
+    t->stack       = stack;
+    t->stack_guard = (uint32_t *)stack;
+    *t->stack_guard = STACK_CANARY;
+    t->user        = true;
+    t->page_dir    = dir;
+    t->brk_start   = current->brk_start;
+    t->brk         = current->brk;
+    t->user_pages  = current->user_pages;
+    t->parent_pid  = current->pid;
+    t->pgid        = current->pgid;                /* bir guruhda: Ctrl+C ikkalasini ham to'xtatadi */
+    t->color       = current->color;
+    t->cwd         = current->cwd;
+    t->forks       = current->forks + 1;
+    memcpy(t->fd, fdt, sizeof(fdt));
+    strcpy(t->note, "fork");
+    if (current->kill_pending) {                   /* ota ayni paytda to'xtatilmoqda (Ctrl+C) — */
+        t->kill_pending = true;                    /* bola ham u bilan birga to'xtaydi */
+        t->kill_code = current->kill_code;
+    }
+
+    /* FPU holati ham nusxalanadi (bola hisob-kitobni otadagi joyidan davom ettiradi) */
+    if (current->fpu_used) {
+        if (fpu_owner == current) {
+            /* Holat hozir FPU registrlarida. fnsave FPU ni tozalab yuboradi — darhol qaytaramiz */
+            __asm__ volatile ("fnsave (%0); frstor (%0)" : : "r"(t->fpu_state) : "memory");
+        } else {
+            memcpy(t->fpu_state, current->fpu_state, FPU_STATE_SIZE);
+        }
+        t->fpu_used = true;
+    }
+
+    registers_t *cr = (registers_t *)(stack + TASK_STACK_SIZE - sizeof(registers_t));
+    *cr = *r;
+    cr->eax  = 0;                                  /* bolada fork() natijasi — 0 */
+    t->regs  = cr;
+    t->state = TASK_READY;
+
+    uint32_t pid = t->pid;
+    irq_restore(flags);
+    return (int32_t)pid;
+}
+
+/*
+ * exec() — joriy jarayon xotirasini yangi dastur bilan almashtirish (v0.10).
+ * Yangi xotira (dir) process.c da to'liq tayyorlangan. Bu yerda: CR3 yangi
+ * xotiraga o'tadi, eski xotira bo'shatiladi va syscall kadri shunday
+ * o'zgartiriladiki, iret jarayonni yangi dasturning BOSHIGA qaytaradi.
+ * PID, ota, guruh, deskriptorlar va joriy papka saqlanadi.
+ */
+void task_exec(registers_t *r, const char *name, uint32_t *dir, uint32_t entry,
+               uint32_t user_esp, uint32_t brk, uint32_t pages)
+{
+    uint32_t flags = irq_save();
+    uint32_t *old = current->page_dir;
+    current->page_dir = dir;
+    paging_switch(dir);
+    memset(current->name, 0, TASK_NAME_LEN);
+    strncpy(current->name, name, TASK_NAME_LEN - 1);
+    current->brk_start  = brk;
+    current->brk        = brk;
+    current->user_pages = pages;
+    current->out_failed = false;
+    current->color      = 0x07;
+    current->note[0]    = 0;
+    if (fpu_owner == current) {
+        /* Eski dasturning FPU holati kerak emas. TS ni yoqamiz: yangi dastur birinchi FPU
+           buyrug'ida #7 oladi va toza holat (fninit) bilan boshlaydi — eski sonlarni ko'rmaydi */
+        fpu_owner = 0;
+        uint32_t cr0;
+        __asm__ volatile ("mov %%cr0, %0" : "=r"(cr0));
+        __asm__ volatile ("mov %0, %%cr0" : : "r"(cr0 | 0x08));
+    }
+    current->fpu_used = false;
+    irq_restore(flags);
+
+    paging_free_directory(old);                    /* eski dastur xotirasi (CoW bo'lsa — hisoblagich -1) */
+
+    uint32_t cs = r->cs, ss = r->ss, ds = r->ds;
+    memset(r, 0, sizeof(*r));
+    r->gs = r->fs = r->es = r->ds = ds;
+    r->cs      = cs;
+    r->ss      = ss;
+    r->eip     = entry;
+    r->useresp = user_esp;
+    r->eflags  = 0x202;
 }
 
 /* int 0x81 — "navbatni ber" uzilishi. U idt.c orqali sched_yield_handler ni chaqiradi */

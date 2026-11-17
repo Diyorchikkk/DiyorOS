@@ -11,8 +11,8 @@
 #define SYSCALL_NUMS_H
 
 #define SYS_EXIT      0   /* exit(kod)                       — dasturni tugatish */
-#define SYS_WRITE     1   /* write(fd, buf, uzunlik)         — 1: ekran, 2: ekran (xato), 3+: fayl */
-#define SYS_READ      2   /* read(fd, buf, uzunlik)          — 0: klaviatura (qator), 3+: fayl */
+#define SYS_WRITE     1   /* write(fd, buf, uzunlik)         — odatda 1: ekran, 2: ekran (xato), 3+: fayl */
+#define SYS_READ      2   /* read(fd, buf, uzunlik)          — odatda 0: klaviatura (qator), 3+: fayl */
 #define SYS_OPEN      3   /* open(yo'l, flaglar)             — fd qaytaradi */
 #define SYS_CLOSE     4   /* close(fd) */
 #define SYS_SLEEP     5   /* sleep(ms) */
@@ -30,9 +30,16 @@
 #define SYS_WIN_CLOSE  16 /* win_close(raqam) */
 /* v0.8: jarayonlar va kanallar */
 #define SYS_SPAWN    17   /* spawn(yo'l, argumentlar, int io[2]) — bola PID; io: {stdin, stdout}, -1 — meros */
-#define SYS_WAIT     18   /* wait(pid, int *kod)             — bolaning tugashini kutish */
+#define SYS_WAIT     18   /* wait(pid, int *kod)             — bola tugashini kutish; pid 0 — istalgani. Bola PID */
 #define SYS_PIPE     19   /* pipe(int fds[2])                — fds[0] o'qish, fds[1] yozish uchi */
-#define SYS_COUNT    20
+/* v0.10: Unix jarayon modeli */
+#define SYS_FORK     20   /* fork()                          — otada bola PID, bolada 0 */
+#define SYS_EXEC     21   /* exec(yo'l, argumentlar)         — dasturni almashtirish (faqat xatoda qaytadi) */
+#define SYS_DUP      22   /* dup(fd)                         — nusxa: eng kichik bo'sh raqam */
+#define SYS_DUP2     23   /* dup2(fd, yangi)                 — "yangi" ni yopib, fd nusxasini qo'yish */
+#define SYS_CHDIR    24   /* chdir(yo'l)                     — jarayonning joriy papkasi */
+#define SYS_GETCWD   25   /* getcwd(buf, hajm)               — joriy papka yo'li */
+#define SYS_COUNT    26
 
 /* open() flaglari (VFS dagi bilan bir xil) */
 #define O_READ    0x01

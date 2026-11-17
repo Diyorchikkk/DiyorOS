@@ -26,7 +26,11 @@ typedef struct {
 
 void     pmm_init(multiboot_info_t *mbi);
 uint32_t pmm_alloc_frame(void);          /* bo'sh frame ning fizik manzili, 0 — xotira tugagan */
-void     pmm_free_frame(uint32_t addr);
+void     pmm_free_frame(uint32_t addr);       /* v0.10: hisoblagichni kamaytiradi, 0 da bo'shatadi */
+void     pmm_free_frame_zero(uint32_t addr);  /* oxirgi egasi bo'lsa — nol bilan tozalab bo'shatish */
+void     pmm_frame_ref(uint32_t addr);        /* frame ni yana bitta jarayon ishlatadi (fork) */
+uint32_t pmm_frame_refs(uint32_t addr);
+uint32_t pmm_shared_frames(void);
 uint32_t pmm_total_frames(void);
 uint32_t pmm_used_frames(void);
 uint32_t pmm_ram_total_mb(void);         /* v0.9: kompyuterdagi butun RAM */
@@ -39,6 +43,8 @@ const mem_region_t *pmm_region(int i);
 #define PAGE_RW      0x2    /* yozish mumkin */
 #define PAGE_USER    0x4    /* foydalanuvchi dasturlari (ring 3) ham ko'ra oladi */
 #define PAGE_PCD     0x10   /* keshlanmasin: qurilma registrlari (MMIO) uchun shart (v0.9) */
+#define PAGE_COW     0x200  /* v0.10: "copy-on-write" — protsessor e'tibor bermaydigan bo'sh bit (AVL).
+                               Sahifa vaqtincha faqat o'qish uchun; yozilganda nusxa olinadi */
 
 /* v0.9: qurilma registrlari (MMIO) uchun virtual hudud — framebuffer dan keyin, 4 MB */
 #define MMIO_VIRT    0xE4000000u
@@ -66,6 +72,13 @@ void      paging_switch(uint32_t *dir);
 bool      paging_map_in(uint32_t *dir, uint32_t virt, uint32_t phys, uint32_t flags);
 bool      paging_translate_in(uint32_t *dir, uint32_t virt, uint32_t *phys, uint32_t *flags);
 bool      paging_check_range(uint32_t *dir, uint32_t virt, uint32_t len, uint32_t need_flags);
+
+/* v0.10: fork va copy-on-write */
+uint32_t *paging_fork_directory(uint32_t *src);            /* ota xotirasining CoW nusxasi */
+int       paging_cow_fault(uint32_t *dir, uint32_t virt);   /* 1 — nusxa olindi, 0 — CoW emas, -1 — xotira yo'q */
+bool      paging_make_writable(uint32_t *dir, uint32_t virt, uint32_t len);   /* oraliqdagi CoW ni oldindan ajratish */
+void      paging_flush_tlb(void);
+void      paging_cow_stats(uint32_t *copies, uint32_t *reused);
 
 /* ------------------------------ Heap ----------------------------- */
 #define HEAP_START 0xD0000000u

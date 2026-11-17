@@ -20,8 +20,11 @@
  * vazifaga o'tish mumkin — umumiy ma'lumotlar mutexlar bilan himoyalangan
  * (vfs, ata, wm). Bu "preemptible kernel" deyiladi.
  *
- * Standart kirish/chiqish (stdin/stdout): jarayonning fd_in / fd_out i
- * o'rnatilgan bo'lsa (pipe: "ls | wc"), fd 0 / fd 1 o'sha kanalga yo'naltiriladi.
+ * v0.10: har jarayonning O'Z deskriptor jadvali (task_t.fd). fd 0/1/2 endi
+ * oddiy deskriptorlar: odatda "konsol" (klaviatura/ekran), lekin pipe yoki
+ * faylga ulangan bo'lishi mumkin ("ls | wc", "dastur > fayl", dup2). Dastur
+ * faqat o'z jadvalidagi raqamlarni ishlata oladi — boshqa jarayonning fayliga
+ * yetib borishning yo'li yo'q (avval buning uchun egasini tekshirish kerak edi).
  */
 #include "process.h"
 #include "syscall_nums.h"
@@ -41,15 +44,19 @@
 #define ENOSYS     (-38)          /* bunday syscall yo'q */
 #define IO_MAX     (64 * 1024)    /* bitta read/write uchun maksimum */
 #define HEAP_LIMIT (16 * 1024 * 1024)
-#define FDS_PER_PROCESS 8         /* bitta dastur ochishi mumkin bo'lgan fayllar */
 
 /* Ko'rsatkich jarayonning o'z xotirasidami? */
 static bool user_ok(uint32_t ptr, uint32_t len, bool write)
 {
     if (ptr < USER_BASE || ptr >= USER_TOP || len > USER_TOP - ptr)
         return false;
-    return paging_check_range(task_current()->page_dir, ptr, len,
-                              PAGE_PRESENT | PAGE_USER | (write ? PAGE_RW : 0));
+    uint32_t *dir = task_current()->page_dir;
+    /* v0.10: kernel bu buferga yozadi. fork dan keyingi "copy-on-write" sahifalar
+       hozircha faqat o'qish uchun — nusxasini oldindan olamiz (aks holda kernel
+       o'zi Page Fault ga tushardi) */
+    if (write && !paging_make_writable(dir, ptr, len))
+        return false;
+    return paging_check_range(dir, ptr, len, PAGE_PRESENT | PAGE_USER | (write ? PAGE_RW : 0));
 }
 
 /* Dasturdagi satrni kernel buferiga xavfsiz nusxalash */
@@ -63,17 +70,6 @@ static bool copy_string(char *dst, uint32_t src, uint32_t max)
             return true;
     }
     return false;                             /* juda uzun */
-}
-
-/*
- * Dastur shu deskriptorni raqami bilan ishlata oladimi? O'ziniki bo'lishi kerak va
- * yashirin stdin/stdout deskriptori bo'lmasligi kerak: ularga dastur faqat fd 0 / fd 1
- * orqali murojaat qiladi. Aks holda close(3) bilan o'z stdout ini yopib qo'yishi,
- * keyin o'sha raqam BOSHQA jarayonga berilsa — unga yozib yuborishi mumkin edi.
- */
-static bool user_fd(const task_t *t, uint32_t fd)
-{
-    return (int)fd != t->fd_in && (int)fd != t->fd_out && vfs_fd_owned((int)fd, t->pid);
 }
 
 /* Ekranga jarayonning O'Z rangida yozish (v0.8: rang har bir jarayonniki — ikki dastur
@@ -124,34 +120,29 @@ static int32_t sys_write(uint32_t fd, uint32_t buf, uint32_t len)
         return EFAULT;
     const char *s = (const char *)buf;
     task_t *t = task_current();
-
-    if (fd == 1 && t->fd_out >= 0) {          /* stdout kanalga (yoki faylga) yo'naltirilgan */
-        int32_t r = vfs_write(t->fd_out, s, len);
-        if (r == VFS_EPIPE) {
-            /* O'qiydigan tomon yopilgan (masalan "ota | grep" da grep tugadi).
-               Unix dagidek (SIGPIPE) jarayon jimgina to'xtatiladi */
-            task_signal_kill(t->pid, EXIT_PIPE);
-        } else if (r != VFS_EINTR && r < (int32_t)len && !t->out_failed && !task_should_abort()) {
-            /* "dastur > /disk/fayl": yozib bo'lmadi (odatda diskda joy tugagan). Dasturlar
-               printf natijasini tekshirmaydi — foydalanuvchi bexabar qolmasligi uchun
-               bir marta ekranga aytamiz */
-            t->out_failed = true;
-            char msg[96];
-            int n = ksnprintf(msg, sizeof(msg), "[PID %u] %s: chiqishni yozib bo'lmadi: %s\n",
-                              t->pid, t->name, vfs_strerror(r < 0 ? r : VFS_ENOSPC));
-            console_write(t, msg, (uint32_t)n, true);
-        }
-        return r;
-    }
-    if (fd == 1 || fd == 2) {
+    int kind = vfs_fd_kind((int)fd);
+    if (kind == VFS_EBADF)
+        return VFS_EBADF;
+    if (kind == FD_CONSOLE) {                 /* ekran; fd 2 (xatolar) — qizil */
         console_write(t, s, len, fd == 2);
         return (int32_t)len;
     }
-    if (!user_fd(t, fd))
-        return VFS_EBADF;                     /* boshqa jarayonning fayli */
-    int32_t r = vfs_write(fd, s, len);
-    if (r == VFS_EPIPE)
+
+    int32_t r = vfs_write((int)fd, s, len);
+    if (r == VFS_EPIPE) {
+        /* O'qiydigan tomon yopilgan (masalan "ota | grep" da grep tugadi).
+           Unix dagidek (SIGPIPE) jarayon jimgina to'xtatiladi */
         task_signal_kill(t->pid, EXIT_PIPE);
+    } else if (fd == 1 && r != VFS_EINTR && r < (int32_t)len && !t->out_failed && !task_should_abort()) {
+            /* "dastur > /disk/fayl": yozib bo'lmadi (odatda diskda joy tugagan). Dasturlar
+           printf natijasini tekshirmaydi — foydalanuvchi bexabar qolmasligi uchun
+           bir marta ekranga aytamiz */
+        t->out_failed = true;
+        char msg[96];
+        int n = ksnprintf(msg, sizeof(msg), "[PID %u] %s: chiqishni yozib bo'lmadi: %s\n",
+                          t->pid, t->name, vfs_strerror(r < 0 ? r : VFS_ENOSPC));
+        console_write(t, msg, (uint32_t)n, true);
+    }
     return r;
 }
 
@@ -162,9 +153,10 @@ static int32_t sys_read(uint32_t fd, uint32_t buf, uint32_t len)
     if (!user_ok(buf, len, true))
         return EFAULT;
     task_t *t = task_current();
-    if (fd == 0 && t->fd_in >= 0)             /* stdin kanaldan */
-        return vfs_read(t->fd_in, (void *)buf, len);
-    if (fd == 0) {
+    int kind = vfs_fd_kind((int)fd);
+    if (kind == VFS_EBADF)
+        return VFS_EBADF;
+    if (kind == FD_CONSOLE) {                 /* klaviatura */
         /*
          * Klaviatura bitta: uni faqat OLDINGI PLANDAGI dastur o'qiy oladi.
          * Fon jarayoni ("dastur &") o'qimoqchi bo'lsa, u shell bilan tugmalarni
@@ -182,9 +174,7 @@ static int32_t sys_read(uint32_t fd, uint32_t buf, uint32_t len)
         }
         return read_line((char *)buf, len);
     }
-    if (!user_fd(t, fd))
-        return VFS_EBADF;
-    return vfs_read(fd, (void *)buf, len);
+    return vfs_read((int)fd, (void *)buf, len);   /* fayl yoki kanal */
 }
 
 static int32_t sys_open(uint32_t upath, uint32_t flags)
@@ -192,16 +182,14 @@ static int32_t sys_open(uint32_t upath, uint32_t flags)
     char path[VFS_PATH_MAX];
     if (!copy_string(path, upath, sizeof(path)))
         return EFAULT;
-    if (vfs_fd_count(task_current()->pid) >= FDS_PER_PROCESS)
-        return VFS_EMFILE;                    /* bitta dastur butun jadvalni to'ldirib qo'ymasin */
+    /* Jadval to'lsa (TASK_MAX_FDS) — VFS_EMFILE: bitta dastur tizimdagi barcha ochiq
+       fayl yozuvlarini egallab ololmaydi */
     return vfs_open(path, flags & (VFS_O_READ | VFS_O_WRITE | VFS_O_CREATE | VFS_O_TRUNC | VFS_O_APPEND));
 }
 
 static int32_t sys_close(uint32_t fd)
 {
-    if (!user_fd(task_current(), fd))
-        return VFS_EBADF;
-    return vfs_close(fd);
+    return vfs_close((int)fd);                /* faqat o'z jadvalidagi raqam */
 }
 
 /* Dastur heap ini kattalashtirish: yangi sahifalar ajratib, xaritaga qo'shamiz */
@@ -228,6 +216,11 @@ static int32_t sys_sbrk(int32_t increment)
            ajratsak, eski frame yo'qolib qolardi (xotira oqishi). Uni tozalab ishlatamiz */
         uint32_t phys;
         if (paging_translate_in(t->page_dir, page, &phys, 0)) {
+            /* v0.10: fork dan keyin bu frame aka-ukasi bilan umumiy bo'lishi mumkin —
+               avval o'z nusxasini olamiz, aks holda ikkalasining xotirasi tozalanardi */
+            if (!paging_make_writable(t->page_dir, page, PAGE_SIZE))
+                return -1;
+            paging_translate_in(t->page_dir, page, &phys, 0);
             memset((void *)(phys & ~0xFFFu), 0, PAGE_SIZE);
             continue;
         }
@@ -261,8 +254,8 @@ static int32_t sys_sysinfo(uint32_t ptr)
             si->task_count++;
     strncpy(si->os_name, OS_NAME, sizeof(si->os_name) - 1);
     strncpy(si->os_version, OS_VERSION, sizeof(si->os_version) - 1);
-    si->stdio = (task_current()->fd_in >= 0 ? SI_STDIN_PIPE : 0) |
-                (task_current()->fd_out >= 0 ? SI_STDOUT_PIPE : 0);
+    si->stdio = (vfs_fd_kind(0) != FD_CONSOLE ? SI_STDIN_PIPE : 0) |
+                (vfs_fd_kind(1) != FD_CONSOLE ? SI_STDOUT_PIPE : 0);
     return 0;
 }
 
@@ -298,27 +291,6 @@ static int32_t sys_win_event(uint32_t id, uint32_t uev)
 
 /* ---------------------- Jarayonlar va kanallar (v0.8) ---------------------- */
 
-/*
- * Bolaning stdin/stdout i uchun deskriptor tayyorlash:
- *   want >= 0 — ota bergan o'z deskriptori (masalan, pipe uchi);
- *   want < 0  — otaning o'zidagi yo'naltirish meros qoladi (bo'lsa).
- * Har doim NUSXA (dup) olinadi: ota o'z deskriptorini o'zi yopadi.
- */
-static int child_fd(int want, int inherited, uint32_t pid, int *out)
-{
-    *out = -1;
-    int src = want >= 0 ? want : inherited;
-    if (src < 0)
-        return 0;
-    if (want >= 0 && !user_fd(task_current(), (uint32_t)want))
-        return VFS_EBADF;
-    int fd = vfs_dup(src, pid);
-    if (fd < 0)
-        return fd;
-    *out = fd;
-    return 0;
-}
-
 /* spawn(yo'l, argumentlar, io) — io: 0 yoki int[2] = {stdin, stdout}, -1 — meros */
 static int32_t sys_spawn(uint32_t upath, uint32_t uargs, uint32_t uio)
 {
@@ -334,64 +306,93 @@ static int32_t sys_spawn(uint32_t upath, uint32_t uargs, uint32_t uio)
             return EFAULT;
         memcpy(io, (const void *)uio, sizeof(io));
     }
-
     task_t *t = task_current();
-    int children = 0;
-    for (int i = 0; i < MAX_TASKS; i++) {
-        task_t *k = task_get(i);
-        if (k->state != TASK_UNUSED && k->parent_pid == t->pid)
-            children++;
-    }
-    if (children >= 4)
+    if (task_count_children(t->pid) >= TASK_MAX_CHILDREN)
         return PROC_ETASKS;                   /* "fork bomb" bo'lmasin: bittada ko'pi bilan 4 bola */
 
-    spawn_opts_t o = { .fd_in = -1, .fd_out = -1, .pgid = t->pgid };
-    int err = child_fd(io[0], t->fd_in, t->pid, &o.fd_in);
-    if (!err)
-        err = child_fd(io[1], t->fd_out, t->pid, &o.fd_out);
-    if (!err) {
-        int32_t pid = process_spawn_ex(path, args, &o);
-        if (pid > 0)
-            return pid;                       /* deskriptorlar endi bolaniki */
-        err = pid;
-    }
-    if (o.fd_in >= 0)
-        vfs_close(o.fd_in);
-    if (o.fd_out >= 0)
-        vfs_close(o.fd_out);
-    return err;
+    /* io dagi raqamlar — shu jarayonning o'z deskriptorlari; bola ularning nusxasini oladi */
+    spawn_opts_t o = { .fd_in = io[0], .fd_out = io[1], .pgid = t->pgid };
+    return process_spawn_ex(path, args, &o);
 }
 
-/* wait(pid) — o'z bolasining tugashini kutish; chiqish kodini qaytaradi */
+/*
+ * wait(pid, &kod) — bolaning tugashini kutish. v0.10: pid = 0 (yoki -1) — istalgan
+ * bola. Tugagan bolaning PID ini qaytaradi; bolasi yo'q bo'lsa — VFS_ENOENT.
+ */
 static int32_t sys_wait(uint32_t pid, uint32_t ucode)
 {
-    task_t *t = task_current();
-    task_t *k = task_find(pid);
-    if (!k || k->parent_pid != t->pid || k == t)
-        return VFS_ENOENT;                    /* bunday bola yo'q */
     if (ucode && !user_ok(ucode, 4, true))
         return EFAULT;
-    int32_t code = task_wait(pid);
-    if (code == SYNC_EINTR && task_should_abort())
+    int32_t code = 0;
+    int32_t cpid = task_wait_child((int32_t)pid, &code);
+    if (cpid == SYNC_EINTR)
         return VFS_EINTR;
-    task_reap_pid(pid);                       /* zombi bolani tozalaymiz */
+    if (cpid < 0)
+        return VFS_ENOENT;                    /* bunday bola yo'q */
+    task_reap_pid((uint32_t)cpid);            /* zombi bolani tozalaymiz */
     if (ucode)
         *(int32_t *)ucode = code;
-    return 0;
+    return cpid;
 }
 
 static int32_t sys_pipe(uint32_t ufds)
 {
     if (!user_ok(ufds, 8, true))
         return EFAULT;
-    if (vfs_fd_count(task_current()->pid) + 2 > FDS_PER_PROCESS)
-        return VFS_EMFILE;
     int fds[2];
-    int err = vfs_pipe(fds);
+    int err = vfs_pipe(fds);                  /* joy bo'lmasa — VFS_EMFILE */
     if (err)
         return err;
     memcpy((void *)ufds, fds, sizeof(fds));
     return 0;
+}
+
+/* ------------------------- fork, exec, dup (v0.10) ------------------------- */
+
+static int32_t sys_fork(registers_t *r)
+{
+    task_t *t = task_current();
+    if (task_count_children(t->pid) >= TASK_MAX_CHILDREN)
+        return PROC_ETASKS;
+    int32_t pid = task_fork(r);
+    if (pid > 0)
+        klog("fork: PID %u (%s) -> PID %d", t->pid, t->name, pid);
+    return pid;
+}
+
+/* exec(yo'l, argumentlar) — muvaffaqiyatda qaytmaydi (dastur almashadi) */
+static int32_t sys_exec(registers_t *r, uint32_t upath, uint32_t uargs)
+{
+    char path[VFS_PATH_MAX], args[128];
+    if (!copy_string(path, upath, sizeof(path)))
+        return EFAULT;
+    args[0] = 0;
+    if (uargs && !copy_string(args, uargs, sizeof(args)))
+        return EFAULT;
+    return process_exec(r, path, args);
+}
+
+static int32_t sys_chdir(uint32_t upath)
+{
+    char path[VFS_PATH_MAX];
+    if (!copy_string(path, upath, sizeof(path)))
+        return EFAULT;
+    return vfs_chdir(path);                   /* faqat SHU jarayonning papkasi o'zgaradi */
+}
+
+static int32_t sys_getcwd(uint32_t ubuf, uint32_t size)
+{
+    char path[VFS_PATH_MAX];
+    int err = vfs_get_path(vfs_cwd(), path, sizeof(path));
+    if (err)
+        return err;
+    uint32_t len = strlen(path);
+    if (len + 1 > size)
+        return VFS_EINVAL;                    /* bufer kichik */
+    if (!user_ok(ubuf, len + 1, true))
+        return EFAULT;
+    memcpy((void *)ubuf, path, len + 1);
+    return (int32_t)len;
 }
 
 void syscall_handler(registers_t *r)
@@ -423,6 +424,12 @@ void syscall_handler(registers_t *r)
     case SYS_SPAWN:      ret = sys_spawn(a, b, c); break;
     case SYS_WAIT:       ret = sys_wait(a, b); break;
     case SYS_PIPE:       ret = sys_pipe(a); break;
+    case SYS_FORK:       ret = sys_fork(r); break;
+    case SYS_EXEC:       ret = sys_exec(r, a, b); break;
+    case SYS_DUP:        ret = vfs_dup((int)a); break;
+    case SYS_DUP2:       ret = vfs_dup2((int)a, (int)b); break;
+    case SYS_CHDIR:      ret = sys_chdir(a); break;
+    case SYS_GETCWD:     ret = sys_getcwd(a, b); break;
     default:
         klog("PID %u (%s): noma'lum syscall %u", task_current()->pid, task_current()->name, r->eax);
         ret = ENOSYS;

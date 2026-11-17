@@ -5,6 +5,8 @@
  *
  *   hack       menyu
  *   hack 2     to'g'ridan-to'g'ri 2-sinov
+ *   hack 9     "fork bomb" (v0.10): jarayonlar to'xtovsiz ko'payadi. Kernel chegaralari
+ *              (bittada 4 bola, tizimda 16 vazifa) uni to'xtatadi; Ctrl+C butun guruhni o'ldiradi
  */
 #include "libc.h"
 
@@ -62,6 +64,31 @@ static void test(int n)
         printf("Stekni to'ldirish (cheksiz rekursiya)...\n");
         overflow(1);
         break;
+    case 9: {
+        printf("Fork bomb: har bir jarayon to'xtovsiz fork() qiladi...\n");
+        int leader = getpid(), err = 0;
+        for (;;) {
+            int pid = fork();
+            if (pid == 0)
+                continue;                   /* bola ham ko'paytirishni davom ettiradi */
+            if (pid < 0) {
+                err = pid;
+                break;
+            }
+        }
+        if (getpid() == leader) {
+            sleep(300);                     /* qolganlari ham chegaraga yetib olsin */
+            struct sysinfo si;
+            sysinfo(&si);
+            setcolor(LIGHT_GREEN);
+            printf("Kernel to'xtatdi: fork() = %d. Tizimda %u ta vazifa (maksimum 16),\n", err, si.task_count);
+            printf("har bir jarayonda ko'pi bilan 4 bola. Kernel va shell ishlayapti.\n");
+            setcolor(LIGHT_GREY);
+            printf("Hamma jarayonlar bitta guruhda: Ctrl+C ularning barchasini to'xtatadi.\n");
+        }
+        for (;;)
+            sleep(1000);
+    }
     default:
         printf("Bunday sinov yo'q\n");
         return;
@@ -83,7 +110,8 @@ int main(int argc, char **argv)
     printf("  2. Kernel xotirasiga yozish   6. Qurilma porti (in)\n");
     printf("  3. Ekran xotirasiga yozish    7. Syscall ga kernel manzili\n");
     printf("  4. O'z kodini o'zgartirish    8. Stekni to'ldirish\n");
-    printf("Tanlang (1-8): ");
+    printf("                                9. Fork bomb (ko'payish)\n");
+    printf("Tanlang (1-9): ");
 
     char line[8];
     readline(line, sizeof(line));

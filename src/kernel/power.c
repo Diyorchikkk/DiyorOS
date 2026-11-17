@@ -6,6 +6,7 @@
 #include "io.h"
 #include "vfs.h"
 #include "klog.h"
+#include "task.h"
 
 void power_reboot(void)
 {
@@ -20,7 +21,9 @@ void power_reboot(void)
 void power_off(void)
 {
     klog("tizimni o'chirish");
-    vfs_chdir("/");
+    /* v0.10: har vazifaning o'z joriy papkasi bor — birortasi /disk ichida qolsa, disk uzilmasdi */
+    for (int i = 0; i < MAX_TASKS; i++)
+        task_get(i)->cwd = vfs_root();
     vfs_unmount("/disk");        /* disk toza uziladi: FSInfo ga bo'sh joy soni yoziladi */
     outw(0x604, 0x2000);         /* QEMU (yangi versiyalar) ACPI o'chirish porti */
     outw(0xB004, 0x2000);        /* Bochs / eski QEMU */

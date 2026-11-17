@@ -45,6 +45,14 @@ int spawn(const char *path, const char *args, const int io[2]) { return syscall3
 int wait(int pid, int *code)                           { return syscall3(SYS_WAIT, pid, (int)code, 0); }
 int pipe(int fds[2])                                   { return syscall3(SYS_PIPE, (int)fds, 0, 0); }
 
+/* v0.10 */
+int fork(void)                                         { return syscall3(SYS_FORK, 0, 0, 0); }
+int exec(const char *path, const char *args)           { return syscall3(SYS_EXEC, (int)path, (int)args, 0); }
+int dup(int fd)                                        { return syscall3(SYS_DUP, fd, 0, 0); }
+int dup2(int fd, int to)                               { return syscall3(SYS_DUP2, fd, to, 0); }
+int chdir(const char *path)                            { return syscall3(SYS_CHDIR, (int)path, 0, 0); }
+int getcwd(char *buf, int size)                        { return syscall3(SYS_GETCWD, (int)buf, size, 0); }
+
 int isatty(int fd)
 {
     struct sysinfo si;
