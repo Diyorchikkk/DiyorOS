@@ -23,7 +23,7 @@ void app_run_program(const char *path)
         wm_track_process((uint32_t)pid);
         return;
     }
-    kprintf("gui: %s - %s\n", path, process_strerror(pid));
+    kprintf("grafik: %s - %s\n", path, process_strerror(pid));
 }
 
 static void about_draw(window_t *w)

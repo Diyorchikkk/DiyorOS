@@ -277,14 +277,14 @@ void cmd_edit(const char *args)
     while (*args == ' ')
         args++;
     if (!*args) {
-        kprintf("Foydalanish: edit <fayl>   (yo'q bo'lsa, saqlaganda yaratiladi)\n");
+        kprintf("Foydalanish: tahrir <fayl>   (yo'q bo'lsa, saqlaganda yaratiladi)\n");
         return;
     }
 
     editor_t *e = kmalloc(sizeof(editor_t));
     char *text = kmalloc(EDIT_MAX);
     if (!e || !text) {
-        kprintf("edit: xotira yetmadi\n");
+        kprintf("tahrir: xotira yetmadi\n");
         kfree(e);
         kfree(text);
         return;
@@ -295,7 +295,7 @@ void cmd_edit(const char *args)
 
     int err = load(e);
     if (err) {
-        kprintf("edit: %s: %s\n", e->path, vfs_strerror(err));
+        kprintf("tahrir: %s: %s\n", e->path, vfs_strerror(err));
         kfree(text);
         kfree(e);
         return;
@@ -345,9 +345,9 @@ void cmd_edit(const char *args)
 
     vga_screen_restore();
     if (e->modified)
-        kprintf("edit: o'zgarishlar saqlanmadi\n");
+        kprintf("tahrir: o'zgarishlar saqlanmadi\n");
     else if (e->message[0])
-        kprintf("edit: %s (%s)\n", e->message, e->path);
+        kprintf("tahrir: %s (%s)\n", e->message, e->path);
     kfree(text);
     kfree(e);
 }

@@ -13,10 +13,11 @@
  *   qobiq:/home/diyorbek$ primes 100 | wc
  *   qobiq:/home/diyorbek$ sanoq 5 > /disk/a.txt
  *   qobiq:/home/diyorbek$ wc < /disk/a.txt
- *   qobiq:/home/diyorbek$ cd /bin
+ *   qobiq:/home/diyorbek$ kir /bin
  *   echo "hello" | qobiq          (stdin kanal bo'lsa — buyruqlarni undan o'qiydi)
  *
- * Ichki buyruqlar: cd, pwd, exit, yordam. Ctrl+C butun guruhni (qobiq ni ham)
+ * Ichki buyruqlar: kir, qayerda, chiq, yordam (Unix nomlari ham ishlaydi: cd, pwd,
+ * exit, help). Ctrl+C butun guruhni (qobiq ni ham)
  * to'xtatadi: DiyorOS da hozircha signal ishlov beruvchilari yo'q.
  */
 #include "libc.h"
@@ -115,25 +116,25 @@ static void help(void)
     printf("  a | b | c                  kanal: a ning chiqishi b ning kirishiga\n");
     printf("  dastur > fayl / >> fayl    chiqishni faylga (>> - oxiriga qo'shish)\n");
     printf("  dastur < fayl              kirishni fayldan\n");
-    printf("  cd [papka], pwd            joriy papka (faqat qobiq niki o'zgaradi)\n");
-    printf("  exit [kod]                 chiqish\n");
+    printf("  kir [papka], qayerda       joriy papka (faqat qobiq niki o'zgaradi)\n");
+    printf("  chiq [kod]                 chiqish\n");
 }
 
 static int builtin(char *cmd, char *args)
 {
-    if (strcmp(cmd, "cd") == 0) {
+    if (strcmp(cmd, "kir") == 0 || strcmp(cmd, "cd") == 0) {
         int r = chdir(*args ? args : "~");
         if (r < 0)
-            err("cd: papka topilmadi: ", args);
+            err("kir: papka topilmadi: ", args);
         return 1;
     }
-    if (strcmp(cmd, "pwd") == 0) {
+    if (strcmp(cmd, "qayerda") == 0 || strcmp(cmd, "pwd") == 0) {
         char cwd[128];
         if (getcwd(cwd, sizeof(cwd)) >= 0)
             printf("%s\n", cwd);
         return 1;
     }
-    if (strcmp(cmd, "exit") == 0)
+    if (strcmp(cmd, "chiq") == 0 || strcmp(cmd, "exit") == 0)
         exit(atoi(args));
     if (strcmp(cmd, "yordam") == 0 || strcmp(cmd, "help") == 0) {
         help();
@@ -270,7 +271,7 @@ int main(void)
     interactive = isatty(0);
     if (interactive) {
         setcolor(LIGHT_GREEN);
-        printf("qobiq (PID %d) - user rejimidagi shell. 'yordam' - buyruqlar, 'exit' - chiqish\n",
+        printf("qobiq (PID %d) - user rejimidagi shell. 'yordam' - buyruqlar, 'chiq' - chiqish\n",
                getpid());
         setcolor(LIGHT_GREY);
     }

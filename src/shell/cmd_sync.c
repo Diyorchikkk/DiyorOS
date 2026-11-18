@@ -73,7 +73,7 @@ static bool have_slots(int count)
     if (unused >= count)
         return true;
     say(VGA_LIGHT_RED, "sinx: namoyishga %d ta oqim kerak, vazifalar jadvalida %d ta joy bor.\n"
-                       "Keraksiz vazifalarni to'xtating: ps, kill <PID>\n", count, unused);
+                       "Keraksiz vazifalarni to'xtating: jarayonlar, toxtat <PID>\n", count, unused);
     return false;
 }
 
@@ -423,6 +423,6 @@ void cmd_sinx(const char *args)
                 "  sinx ishlab               producer-consumer (semafor + mutex)\n"
                 "  sinx deadlock             deadlock va uni aniqlash\n"
                 "  sinx faylasuflar [tartib] ovqatlanayotgan faylasuflar\n"
-                "Holat: cat /proc/sync (mutexlar, semaforlar, kanallar)\n");
+                "Holat: korsat /proc/sync (mutexlar, semaforlar, kanallar)\n");
     }
 }

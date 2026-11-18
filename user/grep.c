@@ -2,7 +2,7 @@
  * grep — naqsh uchragan qatorlarni chiqarish (v0.8).
  *
  *   grep naqsh fayl        faylda qidirish
- *   ls /bin | grep o       boshqa buyruq chiqishidan qidirish
+ *   royxat /bin | grep o   boshqa buyruq chiqishidan qidirish
  *   grep -v naqsh ...      naqsh UCHRAMAGAN qatorlar
  *   grep -c naqsh ...      faqat mos qatorlar soni
  *   grep -i naqsh ...      katta-kichik harf farqsiz

@@ -3,6 +3,7 @@
 #define KERNEL_H
 
 #include <stdint.h>
+#include <stdbool.h>
 #include "multiboot.h"
 
 /* Bootloaderdan olingan xotira ma'lumoti (KB da) */
@@ -27,5 +28,6 @@ void status_bar_refresh(void);
 #define STATUS_TASK_END 29
 
 const char *boot_loader_name(void);    /* v0.9: masalan "GRUB 2.12" */
+bool        kernel_cmdline_has(const char *word);   /* v0.11: yuklash satrida so'z bormi ("test") */
 
 #endif

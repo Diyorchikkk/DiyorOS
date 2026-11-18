@@ -400,7 +400,7 @@ static void cmd_calc(const char *args)
     kprintf("= %d\n", (int32_t)r);
     return;
 usage:
-    kprintf("Foydalanish: calc <son> <+ - * / %%> <son>   masalan: calc 12 * 7\n");
+    kprintf("Foydalanish: hisobla <son> <+ - * / %%> <son>   masalan: hisobla 12 * 7\n");
 }
 
 static void cmd_color(const char *args)
@@ -408,7 +408,7 @@ static void cmd_color(const char *args)
     const char *p = args;
     int32_t c;
     if (!parse_int(&p, &c) || c < 1 || c > 15) {
-        kprintf("Foydalanish: color <1-15>\n");
+        kprintf("Foydalanish: rang <1-15>\n");
         for (uint8_t i = 1; i < 16; i++) {
             vga_set_color(i, VGA_BLACK);
             kprintf("%d ", i);
@@ -434,7 +434,7 @@ static void cmd_sleep(const char *args)
     const char *p = args;
     int32_t s;
     if (!parse_int(&p, &s) || s < 1 || s > 60) {
-        kprintf("Foydalanish: sleep <1-60 soniya>\n");
+        kprintf("Foydalanish: kut <1-60 soniya>\n");
         return;
     }
     kprintf("%d soniya kutilmoqda...\n", s);
@@ -465,10 +465,10 @@ static void eat_task(uint32_t arg)
 
 /*
  * Ataylab kernelni qulatish — himoya mexanizmlari qanday ishlashini ko'rsatadi:
- *   crash         0 ga bo'lish (exception #0)
- *   crash stack   cheksiz rekursiya: stek qo'riqchi sahifaga yetadi -> Double Fault
- *   crash canary  fon oqimida rekursiya: scheduler stek tubidagi belgini tekshirib ushlaydi
- *   crash heap    ajratilgan blokdan tashqariga yozish: heap tekshiruvi ushlaydi
+ *   nosozlik      0 ga bo'lish (exception #0)
+ *   nosozlik stack   cheksiz rekursiya: stek qo'riqchi sahifaga yetadi -> Double Fault
+ *   nosozlik canary  fon oqimida rekursiya: scheduler stek tubidagi belgini tekshirib ushlaydi
+ *   nosozlik heap    ajratilgan blokdan tashqariga yozish: heap tekshiruvi ushlaydi
  */
 static void cmd_crash(const char *args)
 {
@@ -503,7 +503,7 @@ static void cmd_gui(const char *args)
     const char *err = gui_start();
     if (err) {
         vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
-        kprintf("gui: %s\n", err);
+        kprintf("grafik: %s\n", err);
         normal();
         return;
     }
@@ -522,10 +522,10 @@ static void cmd_mouse(const char *args)
         return;
     }
     if (*args) {
-        kprintf("Foydalanish: mouse <1-10>   (5 - standart)\n");
+        kprintf("Foydalanish: sichqon <1-10>   (5 - standart)\n");
         return;
     }
-    kprintf("Sichqoncha tezligi: %d. O'zgartirish: mouse <1-10>\n", gui_mouse_speed());
+    kprintf("Sichqoncha tezligi: %d. O'zgartirish: sichqon <1-10>\n", gui_mouse_speed());
 }
 
 /* PCI qurilmalari ro'yxati (Linux dagi lspci) */
@@ -581,71 +581,81 @@ static const char *category_names[CAT_COUNT] = {
     "Umumiy", "Fayllar (v0.4)", "Disk (v0.6)", "Xotira (v0.2)", "Vazifalar (v0.3)", "Tizim va sinov"
 };
 
+/*
+ * v0.11: buyruq nomlari o'zbekcha (DiyorOS — o'zbek tilidagi OS). unix_name — xalqaro
+ * (Unix) nomi: ro'yxat va Tab da ko'rinmaydi, lekin ishlaydi (odat bo'yicha "ls"
+ * yozilsa ham) va "yordam <buyruq>" da ko'rsatiladi.
+ */
 typedef struct {
     const char *name;
     category_t  category;
     const char *description;
+    const char *unix_name;
     void (*fn)(const char *args);
 } command_t;
 
 static const command_t commands[] = {
-    { "help",      CAT_GENERAL, "Buyruqlar ro'yxati. help <buyruq> - batafsil",   cmd_help      },
-    { "clear",     CAT_GENERAL, "Ekranni tozalash",                                cmd_clear     },
-    { "echo",      CAT_GENERAL, "Matn chiqarish: echo salom | echo matn > fayl",   cmd_echo      },
-    { "about",     CAT_GENERAL, "OS haqida ma'lumot",                              cmd_about     },
-    { "whoami",    CAT_GENERAL, "Muallif haqida",                                  cmd_whoami    },
-    { "time",      CAT_GENERAL, "Sana va vaqt (CMOS soati)",                       cmd_time      },
-    { "uptime",    CAT_GENERAL, "Tizim qancha vaqtdan beri ishlayapti",            cmd_uptime    },
-    { "calc",      CAT_GENERAL, "Kalkulyator: calc 12 * 7",                        cmd_calc      },
-    { "color",     CAT_GENERAL, "Matn rangi: color 14",                            cmd_color     },
-    { "history",   CAT_GENERAL, "Kiritilgan buyruqlar tarixi",                     cmd_history   },
-    { "sleep",     CAT_GENERAL, "N soniya kutish: sleep 3",                        cmd_sleep     },
+    { "yordam",     CAT_GENERAL, "Buyruqlar ro'yxati. yordam <buyruq> - batafsil",                      "help",      cmd_help },
+    { "tozala",     CAT_GENERAL, "Ekranni tozalash",                                                    "clear",     cmd_clear },
+    { "ayt",        CAT_GENERAL, "Matn chiqarish: ayt salom | ayt matn > fayl",                         "echo",      cmd_echo },
+    { "haqida",     CAT_GENERAL, "OS haqida ma'lumot",                                                  "about",     cmd_about },
+    { "kimman",     CAT_GENERAL, "Muallif haqida",                                                      "whoami",    cmd_whoami },
+    { "vaqt",       CAT_GENERAL, "Sana va vaqt (CMOS soati)",                                           "time",      cmd_time },
+    { "ishvaqti",   CAT_GENERAL, "Tizim qancha vaqtdan beri ishlayapti",                                "uptime",    cmd_uptime },
+    { "hisobla",    CAT_GENERAL, "Kalkulyator: hisobla 12 * 7",                                         "calc",      cmd_calc },
+    { "rang",       CAT_GENERAL, "Matn rangi: rang 14",                                                 "color",     cmd_color },
+    { "tarix",      CAT_GENERAL, "Kiritilgan buyruqlar tarixi",                                         "history",   cmd_history },
+    { "kut",        CAT_GENERAL, "N soniya kutish: kut 3",                                              "sleep",     cmd_sleep },
 
-    { "ls",        CAT_FILES,   "Papka ichidagilar: ls [yo'l]",                    cmd_ls        },
-    { "cd",        CAT_FILES,   "Papkaga o'tish: cd /etc | cd .. | cd (uyga)",     cmd_cd        },
-    { "pwd",       CAT_FILES,   "Joriy papka",                                     cmd_pwd       },
-    { "cat",       CAT_FILES,   "Fayl mazmuni: cat salom.txt",                     cmd_cat       },
-    { "edit",      CAT_FILES,   "Matn muharriri: edit fayl.txt",                   cmd_edit      },
-    { "mkdir",     CAT_FILES,   "Papka yaratish: mkdir loyiha",                    cmd_mkdir     },
-    { "touch",     CAT_FILES,   "Bo'sh fayl yaratish: touch a.txt",                cmd_touch     },
-    { "rm",        CAT_FILES,   "O'chirish: rm fayl | rm -r papka",                cmd_rm        },
-    { "cp",        CAT_FILES,   "Nusxa olish: cp a.txt b.txt",                     cmd_cp        },
-    { "mv",        CAT_FILES,   "Ko'chirish / nomini o'zgartirish: mv a.txt b.txt", cmd_mv       },
-    { "tree",      CAT_FILES,   "Papkalar daraxti: tree /",                        cmd_tree      },
-    { "stat",      CAT_FILES,   "Fayl haqida batafsil (inode, vaqtlar)",           cmd_stat      },
-    { "df",        CAT_FILES,   "Fayl tizimlari bandligi",                         cmd_df        },
+    { "royxat",     CAT_FILES,   "Papka ichidagilar: royxat [yo'l]",                                    "ls",        cmd_ls },
+    { "kir",        CAT_FILES,   "Papkaga o'tish: kir /etc | kir .. | kir (uyga)",                      "cd",        cmd_cd },
+    { "qayerda",    CAT_FILES,   "Joriy papka",                                                         "pwd",       cmd_pwd },
+    { "korsat",     CAT_FILES,   "Fayl mazmuni: korsat salom.txt",                                      "cat",       cmd_cat },
+    { "tahrir",     CAT_FILES,   "Matn muharriri: tahrir fayl.txt",                                     "edit",      cmd_edit },
+    { "papka",      CAT_FILES,   "Papka yaratish: papka loyiha",                                        "mkdir",     cmd_mkdir },
+    { "yarat",      CAT_FILES,   "Bo'sh fayl yaratish: yarat a.txt",                                    "touch",     cmd_touch },
+    { "ochir",      CAT_FILES,   "O'chirish: ochir fayl | ochir -r papka",                              "rm",        cmd_rm },
+    { "nusxala",    CAT_FILES,   "Nusxa olish: nusxala a.txt b.txt",                                    "cp",        cmd_cp },
+    { "kochir",     CAT_FILES,   "Ko'chirish / nomini o'zgartirish: kochir a.txt b.txt",                "mv",        cmd_mv },
+    { "daraxt",     CAT_FILES,   "Papkalar daraxti: daraxt /",                                          "tree",      cmd_tree },
+    { "malumot",    CAT_FILES,   "Fayl haqida batafsil (inode, vaqtlar)",                               "stat",      cmd_stat },
+    { "joy",        CAT_FILES,   "Fayl tizimlari bandligi",                                             "df",        cmd_df },
 
-    { "disk",      CAT_DISK,    "Disk va FAT32 haqida ma'lumot",                   cmd_disk      },
-    { "mkfs",      CAT_DISK,    "Diskni FAT32 da formatlash: mkfs [nom]",          cmd_mkfs      },
-    { "mount",     CAT_DISK,    "Ulangan fayl tizimlari | mount disk",             cmd_mount     },
-    { "umount",    CAT_DISK,    "Fayl tizimini uzish: umount /disk",               cmd_umount    },
+    { "disk",       CAT_DISK,    "Disk va FAT32 haqida ma'lumot",                                       "disk",      cmd_disk },
+    { "formatla",   CAT_DISK,    "Diskni FAT32 da formatlash: formatla [nom]",                          "mkfs",      cmd_mkfs },
+    { "ula",        CAT_DISK,    "Ulangan fayl tizimlari | ula disk",                                   "mount",     cmd_mount },
+    { "uz",         CAT_DISK,    "Fayl tizimini uzish: uz /disk",                                       "umount",    cmd_umount },
 
-    { "mem",       CAT_MEMORY,  "Xotira holati: RAM, paging, heap",                cmd_mem       },
-    { "memmap",    CAT_MEMORY,  "BIOS xotira xaritasi",                            cmd_memmap    },
-    { "alloc",     CAT_MEMORY,  "Heap dan xotira olish: alloc 100",                cmd_alloc     },
-    { "free",      CAT_MEMORY,  "Xotirani qaytarish: free 0xD0000018",             cmd_free      },
-    { "heap",      CAT_MEMORY,  "Heap bloklari ro'yxati",                          cmd_heap      },
-    { "memtest",   CAT_MEMORY,  "Heap ni avtomatik sinash",                        cmd_memtest   },
-    { "translate", CAT_MEMORY,  "Virtual -> fizik: translate 0xD0000000",          cmd_translate },
+    { "xotira",     CAT_MEMORY,  "Xotira holati: RAM, paging, heap",                                    "mem",       cmd_mem },
+    { "xarita",     CAT_MEMORY,  "BIOS xotira xaritasi",                                                "memmap",    cmd_memmap },
+    { "ajrat",      CAT_MEMORY,  "Heap dan xotira olish: ajrat 100",                                    "alloc",     cmd_alloc },
+    { "bosh",       CAT_MEMORY,  "Xotirani qaytarish: bosh 0xD0000018",                                 "free",      cmd_free },
+    { "uyum",       CAT_MEMORY,  "Heap bloklari ro'yxati",                                              "heap",      cmd_heap },
+    { "xotirasinov", CAT_MEMORY,  "Heap ni avtomatik sinash",                                            "memtest",   cmd_memtest },
+    { "tarjima",    CAT_MEMORY,  "Virtual -> fizik: tarjima 0xD0000000",                                "translate", cmd_translate },
 
-    { "ps",        CAT_TASKS,   "Vazifalar ro'yxati va CPU ulushi",                cmd_ps        },
-    { "fds",       CAT_TASKS,   "Deskriptor jadvallari: jarayon fd -> ochiq fayl (v0.10)", cmd_fds   },
-    { "spawn",     CAT_TASKS,   "Fon vazifasi: spawn spinner | primes | busy",     cmd_spawn     },
-    { "kill",      CAT_TASKS,   "Vazifani to'xtatish: kill 3",                     cmd_kill      },
-    { "sched",     CAT_TASKS,   "Scheduler statistikasi",                          cmd_sched     },
-    { "sinx",      CAT_TASKS,   "Sinxronizatsiya: sinx poyga|ishlab|deadlock|faylasuflar", cmd_sinx },
+    { "jarayonlar", CAT_TASKS,   "Vazifalar ro'yxati va CPU ulushi",                                    "ps",        cmd_ps },
+    { "deskriptor", CAT_TASKS,   "Deskriptor jadvallari: jarayon fd -> ochiq fayl (v0.10)",             "fds",       cmd_fds },
+    { "yurgiz",     CAT_TASKS,   "Fon vazifasi: yurgiz spinner | primes | busy",                        "spawn",     cmd_spawn },
+    { "toxtat",     CAT_TASKS,   "Vazifani to'xtatish: toxtat 3",                                       "kill",      cmd_kill },
+    { "reja",       CAT_TASKS,   "Rejalashtirish: rr|prio|mlfq|lotereya, taqqos, ulush (v0.11)",        "sched",     cmd_sched },
+    { "ustuvor",    CAT_TASKS,   "Vazifa ustuvorligi: ustuvor PID N (1..10)",                           "nice",      cmd_nice },
+    { "tekshir",    CAT_TASKS,   "Kernelni o'z-o'zini tekshirish (tekshir -v - batafsil)",              "test",      cmd_test },
+    { "sinx",       CAT_TASKS,   "Sinxronizatsiya: sinx poyga|ishlab|deadlock|faylasuflar",             "sinx",      cmd_sinx },
 
-    { "gui",       CAT_SYSTEM,  "Grafik rejim: oynalar, sichqoncha, dasturlar",    cmd_gui       },
-    { "mouse",     CAT_SYSTEM,  "Sichqoncha tezligi: mouse <1-10>",                cmd_mouse     },
-    { "hw",        CAT_SYSTEM,  "Kompyuter haqida hisobot (protsessor, ekran, disk)", cmd_hw   },
-    { "pci",       CAT_SYSTEM,  "PCI qurilmalari ro'yxati",                        cmd_pci       },
-    { "dmesg",     CAT_SYSTEM,  "Kernel jurnali (yuklanishdan beri xabarlar)",     cmd_dmesg     },
-    { "crash",     CAT_SYSTEM,  "Panic sinovi: crash | stack | canary | heap",    cmd_crash     },
-    { "pagefault", CAT_SYSTEM,  "Page Fault sinovi: pagefault | null | kod",       cmd_pagefault },
-    { "reboot",    CAT_SYSTEM,  "Qayta yuklash",                                   cmd_reboot    },
-    { "shutdown",  CAT_SYSTEM,  "O'chirish",                                       cmd_shutdown  },
+    { "grafik",     CAT_SYSTEM,  "Grafik rejim: oynalar, sichqoncha, dasturlar",                        "gui",       cmd_gui },
+    { "sichqon",    CAT_SYSTEM,  "Sichqoncha tezligi: sichqon <1-10>",                                  "mouse",     cmd_mouse },
+    { "qurilma",    CAT_SYSTEM,  "Kompyuter haqida hisobot (protsessor, ekran, disk)",                  "hw",        cmd_hw },
+    { "pci",        CAT_SYSTEM,  "PCI qurilmalari ro'yxati",                                            "pci",       cmd_pci },
+    { "jurnal",     CAT_SYSTEM,  "Kernel jurnali (yuklanishdan beri xabarlar)",                         "dmesg",     cmd_dmesg },
+    { "nosozlik",   CAT_SYSTEM,  "Panic sinovi: nosozlik | stack | canary | heap",                      "crash",     cmd_crash },
+    { "sahifaxato", CAT_SYSTEM,  "Page Fault sinovi: sahifaxato | null | kod",                          "pagefault", cmd_pagefault },
+    { "qaytayukla", CAT_SYSTEM,  "Qayta yuklash",                                                       "reboot",    cmd_reboot },
+    { "ochirish",   CAT_SYSTEM,  "O'chirish",                                                           "shutdown",  cmd_shutdown },
 };
 #define COMMAND_COUNT (sizeof(commands) / sizeof(commands[0]))
+
+static const command_t *find_command(const char *name);
 
 static void cmd_help(const char *args)
 {
@@ -659,15 +669,18 @@ static void cmd_help(const char *args)
                     args, bin, prog->size);
             return;
         }
-        for (unsigned i = 0; i < COMMAND_COUNT; i++)
-            if (strcmp(args, commands[i].name) == 0) {
-                vga_set_color(VGA_YELLOW, VGA_BLACK);
-                kprintf("%s", commands[i].name);
-                normal();
-                kprintf(" - %s\n", commands[i].description);
-                return;
-            }
-        kprintf("help: '%s' degan buyruq yo'q\n", args);
+        const command_t *c = find_command(args);
+        if (c) {
+            vga_set_color(VGA_YELLOW, VGA_BLACK);
+            kprintf("%s", c->name);
+            normal();
+            kprintf(" - %s", c->description);
+            if (strcmp(c->unix_name, c->name) != 0)
+                kprintf("  (Unix: %s)", c->unix_name);
+            kprintf("\n");
+            return;
+        }
+        kprintf("yordam: '%s' degan buyruq yo'q\n", args);
         return;
     }
 
@@ -709,8 +722,8 @@ static void cmd_help(const char *args)
     }
     vfs_unlock();
     normal();
-    kprintf("\nBatafsil: help <buyruq>.  Dasturni fonda ishlatish: nom &   To'xtatish: Ctrl+C\n");
-    kprintf("Kanal: ls | grep o | wc    Faylga: sanoq 9 > f.txt (>> qo'shadi)    wc < f.txt\n");
+    kprintf("\nBatafsil: yordam <buyruq>.  Dasturni fonda ishlatish: nom &   To'xtatish: Ctrl+C\n");
+    kprintf("Kanal: royxat | grep o | wc   Faylga: sanoq 9 > f.txt (>> qo'shadi)   wc < f.txt\n");
     kprintf("Tab - to'ldirish, strelkalar - tarix va qator tahriri, g'ildirak - varaqlash.\n");
 }
 
@@ -1042,7 +1055,7 @@ static void run_pipeline(char *line)
         if (find_command(stage[i]))
             pipe_error("%s: ichki buyruq kanal o'rtasida/oxirida bo'lolmaydi (stdin o'qimaydi)\n", stage[i]);
         else
-            pipe_error("%s: bunday dastur yo'q (/bin ga qarang: ls /bin)\n", stage[i]);
+            pipe_error("%s: bunday dastur yo'q (/bin ga qarang: royxat /bin)\n", stage[i]);
         return;
     }
     /* Yo'naltirishlar: "<" faqat birinchi, ">" faqat oxirgi bosqichda */
@@ -1062,8 +1075,7 @@ static void run_pipeline(char *line)
         if (ip) in_path = ip;
         if (op) out_path = op;
     }
-    if (builtin && (strcmp(stage[0], "edit") == 0 || strcmp(stage[0], "gui") == 0 ||
-                    strcmp(stage[0], "clear") == 0)) {
+    if (builtin && (builtin->fn == cmd_edit || builtin->fn == cmd_gui || builtin->fn == cmd_clear)) {
         pipe_error("%s: ekran bilan ishlaydigan buyruqni kanal/faylga yo'naltirib bo'lmaydi\n", stage[0]);
         return;
     }
@@ -1237,10 +1249,11 @@ static void report_finished(void)
     task_reap();                             /* tugagan kernel oqimlari (masalan, oyna menejeri) */
 }
 
+/* O'zbekcha nom yoki Unix nomi bo'yicha */
 static const command_t *find_command(const char *name)
 {
     for (unsigned i = 0; i < COMMAND_COUNT; i++)
-        if (strcmp(name, commands[i].name) == 0)
+        if (strcmp(name, commands[i].name) == 0 || strcmp(name, commands[i].unix_name) == 0)
             return &commands[i];
     return 0;
 }
@@ -1252,7 +1265,8 @@ static void execute(char *line)
     if (!*cmd)
         return;
     /* v0.8: kanal (|) va yo'naltirish (<, >). "echo matn > fayl" — o'zining eski usuli */
-    bool is_echo = strncmp(cmd, "echo", 4) == 0 && (cmd[4] == ' ' || !cmd[4]);
+    bool is_echo = (strncmp(cmd, "ayt", 3) == 0 && (cmd[3] == ' ' || !cmd[3])) ||
+                   (strncmp(cmd, "echo", 4) == 0 && (cmd[4] == ' ' || !cmd[4]));
     for (char *c = cmd; *c; c++)
         if (*c == '|' || (!is_echo && (*c == '>' || *c == '<'))) {
             run_pipeline(cmd);
@@ -1277,11 +1291,10 @@ static void execute(char *line)
         args = (char *)skip_spaces(args + 1);
     }
 
-    for (unsigned i = 0; i < COMMAND_COUNT; i++) {
-        if (strcmp(cmd, commands[i].name) == 0) {
-            commands[i].fn(args);
-            return;
-        }
+    const command_t *c = find_command(cmd);
+    if (c) {
+        c->fn(args);
+        return;
     }
 
     if (run_program(cmd, args))      /* ichki buyruq emas — /bin dagi dasturmi? */
@@ -1290,7 +1303,7 @@ static void execute(char *line)
     vga_set_color(VGA_LIGHT_RED, VGA_BLACK);
     kprintf("Noma'lum buyruq: %s", cmd);
     normal();
-    kprintf("  ('help' ni yozing)\n");
+    kprintf("  ('yordam' ni yozing)\n");
 }
 
 void shell_run(void)
@@ -1310,7 +1323,7 @@ void shell_run(void)
             kprintf("%s", motd);
         }
     }
-    kprintf("Buyruqlar ro'yxati uchun 'help' ni yozing.\n\n");
+    kprintf("Buyruqlar ro'yxati uchun 'yordam' ni yozing.\n\n");
 
     for (;;) {
         report_finished();

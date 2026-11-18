@@ -135,7 +135,7 @@ int main(void)
 {
     win = win_create("Ilon (ring 3)", WW, WH);
     if (win < 0) {
-        printf("ilon: grafik rejim kerak. Avval 'gui' buyrug'ini yozing.\n");
+        printf("ilon: grafik rejim kerak. Avval 'grafik' buyrug'ini yozing.\n");
         return 1;
     }
     if (!cv_init(&cv, WW, WH)) {

@@ -39,6 +39,7 @@
 #include "klog.h"
 #include "gui.h"
 #include "sync.h"
+#include "tsc.h"
 
 #define EFAULT     (-14)          /* noto'g'ri ko'rsatkich */
 #define ENOSYS     (-38)          /* bunday syscall yo'q */
@@ -254,6 +255,7 @@ static int32_t sys_sysinfo(uint32_t ptr)
             si->task_count++;
     strncpy(si->os_name, OS_NAME, sizeof(si->os_name) - 1);
     strncpy(si->os_version, OS_VERSION, sizeof(si->os_version) - 1);
+    si->cpu_khz = tsc_khz();
     si->stdio = (vfs_fd_kind(0) != FD_CONSOLE ? SI_STDIN_PIPE : 0) |
                 (vfs_fd_kind(1) != FD_CONSOLE ? SI_STDOUT_PIPE : 0);
     return 0;
@@ -380,6 +382,20 @@ static int32_t sys_chdir(uint32_t upath)
     return vfs_chdir(path);                   /* faqat SHU jarayonning papkasi o'zgaradi */
 }
 
+static int32_t sys_unlink(uint32_t upath)
+{
+    char path[VFS_PATH_MAX];
+    if (!copy_string(path, upath, sizeof(path)))
+        return EFAULT;
+    vfs_node_t *n;
+    int err = vfs_lookup(path, &n);
+    if (err)
+        return err;
+    if (n->type == VFS_DIR)
+        return VFS_EISDIR;                    /* papkani faqat shell (rm -r) o'chiradi */
+    return vfs_remove(path, false);
+}
+
 static int32_t sys_getcwd(uint32_t ubuf, uint32_t size)
 {
     char path[VFS_PATH_MAX];
@@ -430,6 +446,7 @@ void syscall_handler(registers_t *r)
     case SYS_DUP2:       ret = vfs_dup2((int)a, (int)b); break;
     case SYS_CHDIR:      ret = sys_chdir(a); break;
     case SYS_GETCWD:     ret = sys_getcwd(a, b); break;
+    case SYS_UNLINK:     ret = sys_unlink(a); break;
     default:
         klog("PID %u (%s): noma'lum syscall %u", task_current()->pid, task_current()->name, r->eax);
         ret = ENOSYS;

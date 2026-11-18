@@ -121,7 +121,7 @@ int main(void)
 {
     win = win_create("Mandelbrot (ring 3, FPU)", MW, MH + BAR_H);
     if (win < 0) {
-        printf("mandel: grafik rejim kerak. Avval 'gui' buyrug'ini yozing.\n");
+        printf("mandel: grafik rejim kerak. Avval 'grafik' buyrug'ini yozing.\n");
         return 1;
     }
     if (!cv_init(&cv, MW, MH + BAR_H)) {

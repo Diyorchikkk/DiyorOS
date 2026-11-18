@@ -7,6 +7,10 @@
 #  make iso    — yuklanadigan ISO (GRUB kerak, ixtiyoriy)
 #  make clean  — build papkasini tozalash
 #
+#  v0.11 — avtomatik sinov va o'lchov (ekransiz, QEMU o'zi o'chadi):
+#  make test   — kernel testlari + user testlari; natija: SELFTEST: OK / XATO
+#  make bench  — algoritmlarni taqqoslash va mikro-o'lchovlar -> build/bench.log, bench.csv
+#
 #  v0.9 — zamonaviy kompyuterni sinash:
 #  make run-ahci — Q35 mashinasi: disk SATA (AHCI) kontrollerida, IDE yo'q
 #  make run-uefi — UEFI (BIOS emas) + Q35 + ISO. ISO da UEFI yuklovchisi bo'lishi
@@ -63,7 +67,7 @@ OBJS     := $(patsubst src/%.s,$(BUILD)/%.o,$(ASM_SRC)) \
             $(BUILD)/initrd.o
 
 # ---- User dasturlar (v0.5) ----
-USER_PROGS   := hello guess primes hack isolate kundalik pi mandel ilon wc grep sanoq ota head nusxa qobiq
+USER_PROGS   := hello guess primes hack isolate kundalik pi mandel ilon wc grep sanoq ota head nusxa qobiq sinov olchov
 USER_BINS    := $(addprefix $(BUILD)/user/,$(USER_PROGS))
 USER_LIB     := $(BUILD)/user/crt0.o $(BUILD)/user/libc.o $(BUILD)/user/ugfx.o $(BUILD)/user/font.o
 USER_CFLAGS  := $(ARCH_C) -std=gnu99 -ffreestanding -O2 -Wall -Wextra \
@@ -71,7 +75,7 @@ USER_CFLAGS  := $(ARCH_C) -std=gnu99 -ffreestanding -O2 -Wall -Wextra \
                 -fno-builtin -Iinclude -Iuser
 USER_LDFLAGS := $(ARCH_LD) -T user/linker.ld -ffreestanding -nostdlib -static
 
-.PHONY: all run debug iso run-iso clean newdisk
+.PHONY: all run debug iso run-iso clean newdisk test bench
 .SECONDARY:
 
 all: $(KERNEL)
@@ -152,3 +156,21 @@ run-uefi: $(DISK)
 
 clean:
 	rm -rf $(BUILD)
+
+# ---- v0.11: avtomatik sinov va o'lchov ----
+# -snapshot: disk.img ga yozilganlar saqlanmaydi (testlar diskni o'zgartirmaydi)
+# -append:   yuklash satri; kernel uni o'qib, ishni tugatgach kompyuterni o'chiradi
+QEMU_AUTO := -m 128M $(QEMU_DISK) -snapshot -display none -no-reboot
+
+test: $(KERNEL) $(DISK)
+	@echo "Testlar ishlayapti (QEMU, ekransiz)..."
+	@$(QEMU) -kernel $(KERNEL) -append "test" $(QEMU_AUTO) -serial file:$(BUILD)/test.log
+	@grep -a -E "^\[( OK |XATO| -- )\]|Natija|SELFTEST" $(BUILD)/test.log
+	@grep -q -a "SELFTEST: OK" $(BUILD)/test.log
+
+bench: $(KERNEL) $(DISK)
+	@echo "O'lchovlar ishlayapti (~1 daqiqa, QEMU ekransiz)..."
+	@$(QEMU) -kernel $(KERNEL) -append "bench" $(QEMU_AUTO) -serial file:$(BUILD)/bench.log
+	@grep -a "^CSV," $(BUILD)/bench.log > $(BUILD)/bench.csv || true
+	@sed -n '/^=== /,/BENCH: TAYYOR/p' $(BUILD)/bench.log | grep -a -v -E "^CSV,|^\[ *[0-9]+\.[0-9]+\]"
+	@echo "Jadval: $(BUILD)/bench.csv  (grafiklar: python3 tools/grafik.py $(BUILD)/bench.csv)"

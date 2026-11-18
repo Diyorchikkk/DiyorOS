@@ -2,9 +2,9 @@
  * cmd_disk.c — disk bilan bog'liq shell buyruqlari (v0.6).
  *
  *   disk           disk va FAT32 haqida ma'lumot
- *   mkfs [nom]     diskni FAT32 da formatlash (hamma ma'lumot o'chadi!)
- *   mount          ulangan fayl tizimlari; "mount disk" — diskni /disk ga ulash
- *   umount /disk   diskni uzish
+ *   formatla [nom]     diskni FAT32 da formatlash (hamma ma'lumot o'chadi!)
+ *   ula            ulangan fayl tizimlari; "ula disk" — diskni /disk ga ulash
+ *   uz /disk       diskni uzish
  */
 #include <stdint.h>
 #include <stdbool.h>
@@ -64,7 +64,7 @@ void cmd_disk(const char *args)
     fat32_stats_t st;
     fat32_stats(&st);
     if (!st.mounted) {
-        kprintf("Fayl tizimi:    ulanmagan (formatlash: mkfs, ulash: mount disk)\n");
+        kprintf("Fayl tizimi:    ulanmagan (formatlash: formatla, ulash: ula disk)\n");
         return;
     }
     uint32_t mb = 1024 * 1024 / st.cluster_bytes;
@@ -83,13 +83,13 @@ void cmd_mkfs(const char *args)
         args++;
     const char *label = *args ? args : "DIYOROS";
     if (!disk_info()->present) {
-        red("mkfs: disk topilmadi\n");
+        red("formatla: disk topilmadi\n");
         return;
     }
 
     const char *danger = fat32_foreign_disk();
     if (danger) {
-        red("mkfs: rad etildi - ");
+        red("formatla: rad etildi - ");
         red(danger);
         red(".\n");
         kprintf("Disk: %s, %u MB. Bu boshqa operatsion tizimning diski bo'lishi mumkin -\n"
@@ -115,7 +115,7 @@ void cmd_mkfs(const char *args)
     if (st.mounted) {
         int err = vfs_unmount("/disk");
         if (err) {
-            kprintf("mkfs: /disk ni uzib bo'lmadi: %s\n", vfs_strerror(err));
+            kprintf("formatla: /disk ni uzib bo'lmadi: %s\n", vfs_strerror(err));
             return;
         }
     }
@@ -123,13 +123,13 @@ void cmd_mkfs(const char *args)
     kprintf("Formatlanmoqda...\n");
     int err = fat32_mkfs(label);
     if (err) {
-        kprintf("mkfs: %s\n", err == VFS_ENOSPC ? "FAT32 uchun disk kamida 33 MB bo'lishi kerak"
+        kprintf("formatla: %s\n", err == VFS_ENOSPC ? "FAT32 uchun disk kamida 33 MB bo'lishi kerak"
                                                 : vfs_strerror(err));
         return;
     }
     err = disk_mount();
     if (err) {
-        kprintf("mkfs: formatlandi, lekin ulab bo'lmadi: %s\n", vfs_strerror(err));
+        kprintf("formatla: formatlandi, lekin ulab bo'lmadi: %s\n", vfs_strerror(err));
         return;
     }
     fat32_stats(&st);
@@ -146,7 +146,7 @@ void cmd_mount(const char *args)
     if (strcmp(args, "disk") == 0) {
         int err = disk_mount();
         if (err)
-            kprintf("mount: %s\n", err == VFS_EINVAL ? "disk FAT32 da formatlanmagan (mkfs)" :
+            kprintf("ula: %s\n", err == VFS_EINVAL ? "disk FAT32 da formatlanmagan (formatla)" :
                                    err == VFS_EBUSY  ? "disk allaqachon /disk ga ulangan"
                                                      : vfs_strerror(err));
         else
@@ -157,7 +157,7 @@ void cmd_mount(const char *args)
     const char *path, *fs;
     for (int i = 0; vfs_mount_info(i, &path, &fs) == VFS_OK; i++)
         kprintf("%-12s %s\n", fs, path);
-    kprintf("(diskni ulash: mount disk)\n");
+    kprintf("(diskni ulash: ula disk)\n");
 }
 
 void cmd_umount(const char *args)
@@ -165,12 +165,12 @@ void cmd_umount(const char *args)
     while (*args == ' ')
         args++;
     if (!*args) {
-        kprintf("Foydalanish: umount /disk\n");
+        kprintf("Foydalanish: uz /disk\n");
         return;
     }
     int err = vfs_unmount(args);
     if (err)
-        kprintf("umount: %s: %s\n", args, err == VFS_EINVAL ? "bu yerga hech narsa ulanmagan"
+        kprintf("uz: %s: %s\n", args, err == VFS_EINVAL ? "bu yerga hech narsa ulanmagan"
                                                             : vfs_strerror(err));
     else
         kprintf("%s uzildi\n", args);

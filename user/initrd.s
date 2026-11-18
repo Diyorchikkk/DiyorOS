@@ -44,6 +44,8 @@ initrd_table:
     ENTRY head
     ENTRY nusxa
     ENTRY qobiq
+    ENTRY sinov
+    ENTRY olchov
     .long 0, 0, 0              # ro'yxat oxiri
 
     BLOB hello
@@ -62,5 +64,7 @@ initrd_table:
     BLOB head
     BLOB nusxa
     BLOB qobiq
+    BLOB sinov
+    BLOB olchov
 
 .section .note.GNU-stack, "", @progbits

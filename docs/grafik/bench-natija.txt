@@ -1,0 +1,54 @@
+=== Rejalashtirish algoritmlari (3 marta takror) ===
+A) TEKSHIRUV: 4 ta hisob vazifasi - 95, 195, 395 ms (ustuvorlik 5) va 795 ms (2).
+   O'rtacha aylanish vaqti nazariy model bilan solishtiriladi. Takror: 3
+
+Algoritm  Kvant  Aylanish  Nazariya    Farq   Kutish   Javob   Alm.
+RR           10       903       897   +0.6%      533      11    116
+RR           50       870       837   +3.9%      500      71     28
+RR          200       754       687   +9.7%      384     217     11
+PRIO         50       720       700   +2.8%      350     205     16
+MLFQ      10-40       877         -       -      507      12     47
+LOTEREYA     50       775         -       -      405     128     16
+
+B) ARALASH: o'sha 4 ta + 2 ta interaktiv (30 x: 20 ms uxlash + 1 ms ish, ustuvorlik 8)
+
+Algoritm  Kvant Aylanish  Kutish  Javob  Qisqa Uyg'on.o'r,mks     maks  Alm.
+RR           10      946     576     10    398          17469    31122   185
+RR           50      900     530     70    295          33872   180961   115
+RR          200      789     418    216     95          25056   381023   103
+PRIO         50      782     412    199    304            509     1193   100
+MLFQ      10-40      957     587      9    402           1173    21018   123
+LOTEREYA     50      899     529    181    421          33385   369917   110
+
+Vaqtlar ms da (hisob vazifalari bo'yicha o'rtacha). Kichigi yaxshi.
+Uyg'onish - interaktiv dastur (klaviatura, sichqoncha) qanchalik tez javob beradi.
+Qisqa - eng qisqa vazifa qachon tugadi.
+
+=== Protsessor ulushi ===
+Uchta cheksiz hisob vazifasi 2 soniya: A (ustuvorlik 2), B (4), C (8).
+Protsessor ulushi (%):
+
+Algoritm         A       B       C
+RR             33%     33%     33%
+PRIO            0%      0%    100%
+MLFQ           34%     34%     31%
+LOTEREYA       16%     28%     55%
+kutilgan       14%     29%     57%   (lotereya nazariyasi: chiptalar 2:4:8)
+
+=== Mikro-o'lchovlar ===
+O'lchovlar (TSC 2100 MHz, o'rtacha qiymatlar):
+  syscall: getpid()                          910 ns   (1913 takt)
+  malloc(64) + free                           64 ns   (136 takt)
+  pipe ping-pong (2 almashish + 4 syscall)    22.0 mks   (46362 takt)
+  pipe: 1 MB jarayondan jarayonga             55.6 MB/s
+  fork() + exit + wait                       138.5 mks   (291063 takt)
+  memcpy 4 KB (libc, taqqoslash uchun)        11.4 mks   (24057 takt)
+  fork() 1 MB lik jarayon (CoW)              158.8 mks   (333656 takt)
+  CoW: sahifaga birinchi yozish             4685 ns   (9841 takt)
+  fork + exec + wait (dastur yuklash)        909.3 mks   (1909977 takt)
+  spawn + wait                               688.6 mks   (1446436 takt)
+  ramfs: yozish 256 KB                       327.2 MB/s
+  ramfs: o'qish                              681.1 MB/s
+  FAT32 /disk: yozish 256 KB                   0.8 MB/s
+  FAT32 /disk: o'qish                          7.8 MB/s
+BENCH: TAYYOR

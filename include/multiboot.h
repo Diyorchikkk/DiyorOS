@@ -7,6 +7,7 @@
 #define MULTIBOOT_BOOTLOADER_MAGIC 0x2BADB002
 
 #define MULTIBOOT_FLAG_MEM   (1 << 0)   /* mem_lower / mem_upper to'g'ri */
+#define MULTIBOOT_FLAG_CMDLINE (1 << 2) /* yuklash satri (QEMU -append, GRUB) bor (v0.11) */
 #define MULTIBOOT_FLAG_MMAP  (1 << 6)   /* xotira xaritasi (mmap) bor */
 #define MULTIBOOT_FLAG_LOADER (1 << 9)  /* bootloader nomi bor (v0.9) */
 #define MULTIBOOT_FLAG_FB    (1 << 12)  /* framebuffer (ekran) ma'lumoti bor (v0.9) */

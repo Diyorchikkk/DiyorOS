@@ -52,6 +52,7 @@ int dup(int fd)                                        { return syscall3(SYS_DUP
 int dup2(int fd, int to)                               { return syscall3(SYS_DUP2, fd, to, 0); }
 int chdir(const char *path)                            { return syscall3(SYS_CHDIR, (int)path, 0, 0); }
 int getcwd(char *buf, int size)                        { return syscall3(SYS_GETCWD, (int)buf, size, 0); }
+int unlink(const char *path)                           { return syscall3(SYS_UNLINK, (int)path, 0, 0); }
 
 int isatty(int fd)
 {

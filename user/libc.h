@@ -52,6 +52,23 @@ int      dup(int fd);                             /* fd nusxasi (eng kichik bo's
 int      dup2(int fd, int to);                    /* "to" ni fd ning nusxasiga aylantirish */
 int      chdir(const char *path);                 /* shu jarayonning joriy papkasi */
 int      getcwd(char *buf, int size);             /* joriy papka; uzunlik yoki xato */
+int      unlink(const char *path);                /* faylni o'chirish (v0.11) */
+
+/* v0.11: aniq vaqt o'lchash — protsessor taktlari (sysinfo.cpu_khz bilan vaqtga aylantiriladi) */
+static inline unsigned long long rdtsc(void)
+{
+    unsigned lo, hi;
+    __asm__ volatile ("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((unsigned long long)hi << 32) | lo;
+}
+
+/* 64 bitli sonni 32 bitliga bo'lish (libgcc yo'q) */
+static inline unsigned long long udiv64(unsigned long long n, unsigned d)
+{
+    unsigned hi = (unsigned)(n >> 32), lo = (unsigned)n, qhi = hi / d, r = hi % d, qlo;
+    __asm__ ("divl %4" : "=a"(qlo), "=d"(r) : "a"(lo), "d"(r), "rm"(d));
+    return ((unsigned long long)qhi << 32) | qlo;
+}
 
 /* Maxsus tugmalar (GUI_EV_KEY dagi key) */
 #define KEY_UP     0x11

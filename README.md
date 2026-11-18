@@ -1,4 +1,4 @@
-# DiyorOS v0.10
+# DiyorOS v0.11
 
 C va Assembly'da noldan yozilgan operatsion tizim. Arxitektura: x86, 32-bit protected mode.
 Linux, Windows yoki boshqa OS kodidan foydalanilmagan: kompyuter yoqilgandan keyin ekranga chiqadigan
@@ -11,19 +11,23 @@ Nimalari bor:
 - **Yuklanish**: Multiboot (QEMU `-kernel` yoki GRUB ISO), **BIOS va UEFI** (v0.9), GDT, IDT, PIC, TSS
 - **Xotira**: fizik xotira menejeri (bitmap + frame hisoblagichlari), paging, har bir jarayonga alohida manzil
   maydoni, **copy-on-write** (v0.10), kernel heap
-- **Jarayonlar**: preemptive Round-Robin scheduler, kernel oqimlari, ring 3 dagi dasturlar (ELF), 26 ta syscall,
+- **Rejalashtirish** (v0.11): 4 ta algoritm — **MLFQ** (standart), Round-Robin, qat'iy ustuvorlik, lotereya;
+  ish vaqtida almashtiriladi, TSC bilan mikrosekund aniqlikdagi o'lchovlar, taqqoslash tajribalari
+- **Jarayonlar**: preemptive scheduler, kernel oqimlari, ring 3 dagi dasturlar (ELF), 27 ta syscall,
   Unix jarayon modeli — **`fork`, `exec`, `wait`, `dup2`** (v0.10) va `spawn`, signal (Ctrl+C butun guruhga),
   har jarayonning o'z deskriptor jadvali va joriy papkasi; **user rejimidagi shell** (`qobiq`)
 - **Sinxronizatsiya va IPC** (v0.8): mutex (deadlock aniqlash bilan), semafor, kutish navbatlari, kanallar
-  (`ls | grep o | wc`), `>` `>>` `<` yo'naltirish; syscall'lar ichida ham uzilishlar yoqiq (preemptive kernel)
+  (`royxat | grep o | wc`), `>` `>>` `<` yo'naltirish; syscall'lar ichida ham uzilishlar yoqiq (preemptive kernel)
 - **Fayl tizimlari**: VFS, ramfs, procfs (`/proc`), FAT32 (diskda, uzun nomlar bilan)
 - **Drayverlar**: VGA matn rejimi va **grafik konsol** (UEFI framebuffer, v0.9), PS/2 klaviatura va sichqoncha,
   PIT taymer, CMOS soati, ATA (IDE) va **AHCI (SATA, DMA)** disklar, serial port
-- **Ishonchlilik**: kernel panic (backtrace bilan), kernel jurnali (`dmesg`), stek va heap qo'riqchilari,
+- **Ishonchlilik**: kernel panic (backtrace bilan), kernel jurnali (`jurnal`), stek va heap qo'riqchilari,
   faqat o'qiladigan kernel kodi, Double Fault uchun alohida stek, FPU kontekstini saqlash
 - **Grafik interfeys** (v0.7): 1024x768, oyna menejeri va kompozitor, sichqoncha, vazifalar paneli,
   Start menyusi; Terminal, Fayllar, Tizim monitori, Chizish; ring 3 dagi grafik dasturlar (Mandelbrot, Ilon)
-- **Shell**: 50 ta buyruq, qator tahriri, tarix, Tab bilan to'ldirish, matn muharriri
+- **Sinov**: `make test` — 106 ta avtomatik tekshiruv (kernel + user), `make bench` — o'lchovlar va grafiklar
+- **Shell**: 52 ta buyruq — o'zbekcha nomlar (`yordam`, `royxat`, `korsat`...), Unix nomlari ham ishlaydi;
+  qator tahriri, tarix, Tab bilan to'ldirish, matn muharriri
 
 ---
 
@@ -43,7 +47,7 @@ make        # kernelni yig'adi -> build/diyoros.bin
 make run    # QEMU oynasida OS ochiladi (birinchi marta disk.img ham yaratiladi)
 ```
 
-Birinchi ishga tushirishda disk bo'sh bo'ladi: DiyorOS ichida `mkfs` deb yozib, `ha` bilan tasdiqlang.
+Birinchi ishga tushirishda disk bo'sh bo'ladi: DiyorOS ichida `formatla` deb yozib, `ha` bilan tasdiqlang.
 Shundan keyin `/disk` dagi fayllar o'chirib-yoqqandan keyin ham saqlanadi.
 
 `make run` paytida DiyorOS ekraniga chiqqan matn va kernel jurnali **Mac terminalida ham** ko'rinadi
@@ -57,6 +61,8 @@ Shundan keyin `/disk` dagi fayllar o'chirib-yoqqandan keyin ham saqlanadi.
 | `make iso` | GRUB orqali yuklanadigan `build/diyoros.iso` (UTM yoki haqiqiy kompyuter uchun) |
 | `make run-ahci` | v0.9: zamonaviy mashina (Q35) — disk SATA (AHCI) kontrollerida |
 | `make run-uefi` | v0.9: UEFI + Q35 + tayyor `diyoros.iso` (BIOS + UEFI) |
+| `make test` | v0.11: avtomatik testlar (ekransiz, ~1 s): `SELFTEST: OK` |
+| `make bench` | v0.11: algoritmlarni taqqoslash va o'lchovlar (~1 daqiqa) -> `build/bench.csv` |
 | `make newdisk` | yangi bo'sh `disk.img` |
 | `make clean` | `build/` ni tozalash (`disk.img` saqlanadi) |
 
@@ -77,27 +83,30 @@ qaytarish: **Ctrl + Option + G**.
 | Buyruq | Nimani ko'rsatadi |
 |---|---|
 | (yuklanish ekrani) | `[ OK ]` qatorlari — har bir tizim qismi ketma-ket ishga tushadi |
-| `help` | Shell va buyruqlar jadvali |
-| `mem`, `memmap` | Fizik xotira, paging, heap |
-| `ps`, `spawn spinner`, `spawn busy` | Multitasking: vazifalar parallel ishlaydi, preemption |
-| `ls /`, `cat /proc/meminfo`, `cat /proc/interrupts` | VFS, virtual fayllar |
-| `edit /disk/salom.txt` | Matn muharriri, diskka yozish (qayta yoqqandan keyin ham turadi) |
+| `yordam` | Shell va buyruqlar jadvali |
+| `xotira`, `xarita` | Fizik xotira, paging, heap |
+| `jarayonlar`, `yurgiz spinner`, `yurgiz busy` | Multitasking: vazifalar parallel ishlaydi, preemption |
+| `royxat /`, `korsat /proc/meminfo`, `korsat /proc/interrupts` | VFS, virtual fayllar |
+| `tahrir /disk/salom.txt` | Matn muharriri, diskka yozish (qayta yoqqandan keyin ham turadi) |
 | `hello`, `guess` | Ring 3 dagi dasturlar, syscall'lar |
 | `hack 1` ... `hack 8` | Himoya: dastur kernelga tega olmaydi, faqat o'zi o'ladi |
 | `pi &`, `pi &`, `pi` | Uchta dastur bir vaqtda suzuvchi nuqtali hisob qiladi (FPU konteksti) |
-| `dmesg` | Kernel jurnali |
-| `pagefault kod` | Kernel o'z kodiga yoza olmaydi (faqat o'qish uchun) |
-| `crash stack` | Stek to'lib ketishi → Double Fault → toza *kernel panic* (qayta yuklanib ketmaydi) |
-| `crash heap` | Buzilgan heap aniqlanadi |
+| `jurnal` | Kernel jurnali |
+| `sahifaxato kod` | Kernel o'z kodiga yoza olmaydi (faqat o'qish uchun) |
+| `nosozlik stack` | Stek to'lib ketishi → Double Fault → toza *kernel panic* (qayta yuklanib ketmaydi) |
+| `nosozlik heap` | Buzilgan heap aniqlanadi |
 | `pci` | PCI qurilmalari: videokarta, disk kontrolleri |
-| `gui` | **Grafik rejim**: oynalar, sichqoncha, dasturlar — batafsil: [docs/v0.7-grafika.md](docs/v0.7-grafika.md) |
-| `ls /bin \| grep o \| wc`, `sanoq 100 > /disk/son.txt`, `ota` | **Kanallar, yo'naltirish, spawn/wait** |
+| `grafik` | **Grafik rejim**: oynalar, sichqoncha, dasturlar — batafsil: [docs/v0.7-grafika.md](docs/v0.7-grafika.md) |
+| `royxat /bin \| grep o \| wc`, `sanoq 100 > /disk/son.txt`, `ota` | **Kanallar, yo'naltirish, spawn/wait** |
 | `sinx poyga`, `sinx ishlab`, `sinx deadlock`, `sinx faylasuflar` | **Sinxronizatsiya**: race condition, producer-consumer, deadlock — batafsil: [docs/v0.8-sinxronizatsiya.md](docs/v0.8-sinxronizatsiya.md) |
-| `hw` | Kompyuter haqida hisobot: protsessor, ekran (VGA yoki UEFI framebuffer), disk drayveri — [docs/v0.9-haqiqiy-kompyuter.md](docs/v0.9-haqiqiy-kompyuter.md) |
-| `nusxa`, `mem` | **fork, copy-on-write, exec**: 1 MB fork da nusxalanmaydi, faqat yozilganda — [docs/v0.10-fork-exec.md](docs/v0.10-fork-exec.md) |
-| `qobiq` → `primes 100 \| wc`, `sanoq 5 > /disk/a.txt`, `cd /bin` | **User rejimidagi shell**: fork + pipe + dup2 + exec |
-| `fds`, `cat /proc/fds` | Deskriptor jadvallari: jarayon fd → ochiq fayl → fayl (uch qatlam) |
+| `qurilma` | Kompyuter haqida hisobot: protsessor, ekran (VGA yoki UEFI framebuffer), disk drayveri — [docs/v0.9-haqiqiy-kompyuter.md](docs/v0.9-haqiqiy-kompyuter.md) |
+| `nusxa`, `xotira` | **fork, copy-on-write, exec**: 1 MB fork da nusxalanmaydi, faqat yozilganda — [docs/v0.10-fork-exec.md](docs/v0.10-fork-exec.md) |
+| `qobiq` → `primes 100 \| wc`, `sanoq 5 > /disk/a.txt`, `kir /bin` | **User rejimidagi shell**: fork + pipe + dup2 + exec |
+| `deskriptor`, `korsat /proc/fds` | Deskriptor jadvallari: jarayon fd → ochiq fayl → fayl (uch qatlam) |
 | `hack 9`, Ctrl+C | Fork bomb: kernel chegaralari, butun guruhni to'xtatish |
+| `tekshir` | **Avtomatik testlar**: 75 ta tekshiruv 1 soniyada (Mac'da: `make test`) |
+| `reja`, `reja ulush`, `reja taqqos` | **Tadqiqot**: 4 ta rejalashtirish algoritmi, o'lchov va nazariya — [docs/v0.11-tadqiqot.md](docs/v0.11-tadqiqot.md) |
+| `olchov` | syscall, fork, CoW, exec, pipe, disk narxi (mikrosekundlarda) |
 
 Har bir bosqichning batafsil demo ketma-ketligi va himoya savollari `docs/` papkasida.
 
@@ -116,7 +125,10 @@ DiyorOS/
 ├── grub.cfg              ISO uchun GRUB sozlamasi
 ├── include/              sarlavha (.h) fayllar
 ├── docs/                 har bir bosqich bo'yicha tushuntirish va himoya savollari
-├── tools/mkfont.py       shrift faylini yaratish
+├── tools/
+│   ├── mkfont.py         shrift faylini yaratish
+│   ├── sched_sim.py      rejalashtirish algoritmlarining nazariy modeli (v0.11)
+│   └── grafik.py         make bench natijalaridan grafiklar (v0.11)
 ├── src/
 │   ├── boot/
 │   │   ├── boot.s        Multiboot header, stek (qo'riqchi sahifa bilan), kernel_main ga o'tish
@@ -125,7 +137,9 @@ DiyorOS/
 │   │   ├── kernel.c      asosiy funksiya: hamma qismni tartib bilan ishga tushiradi
 │   │   ├── gdt.c         segmentlar (ring 0 / ring 3), TSS, Double Fault TSS
 │   │   ├── idt.c         uzilishlar jadvali, PIC, soxta IRQ, exception'larni taqsimlash
-│   │   ├── task.c        vazifalar, scheduler, fork/exec, signal, stek qo'riqchisi, FPU konteksti
+│   │   ├── task.c        vazifalar, scheduler (MLFQ, RR, PRIO, lotereya), fork/exec, signal, FPU
+│   │   ├── schedbench.c  algoritmlarni taqqoslash tajribalari (v0.11)
+│   │   ├── selftest.c    kernelning o'z-o'zini tekshirishi, make test (v0.11)
 │   │   ├── sync.c        kutish navbati, mutex (deadlock aniqlash), semafor (v0.8)
 │   │   ├── process.c     ELF yuklovchi (spawn, exec), dastur xatolarini ushlash
 │   │   ├── syscall.c     tizim chaqiruvlari, int 0x80
@@ -188,7 +202,8 @@ DiyorOS/
     ├── initrd.s          dasturlarni kernel ichiga joylash
     ├── hello.c guess.c primes.c hack.c isolate.c kundalik.c pi.c mandel.c ilon.c
     ├── wc.c grep.c head.c sanoq.c ota.c   (v0.8: kanallar va spawn/wait uchun)
-    └── nusxa.c qobiq.c   (v0.10: fork/CoW/exec namoyishi va user rejimidagi shell)
+    ├── nusxa.c qobiq.c   (v0.10: fork/CoW/exec namoyishi va user rejimidagi shell)
+    └── sinov.c olchov.c  (v0.11: user testlari va mikro-o'lchovlar)
 ```
 
 ---
@@ -233,10 +248,73 @@ protsessor boshqa vazifalarga beriladi.
   o'ldiriladi ("Segmentation fault"). Kernelning o'zi xato qilsa — *kernel panic*: tizim to'xtaydi,
   chunki buzilgan kernel bilan davom etish ma'lumotlarni yo'qotishi mumkin.
 
-Har bir bosqichga oid savollar: `docs/v0.2-xotira.md` ... `docs/v0.10-fork-exec.md`.
+Har bir bosqichga oid savollar: `docs/v0.2-xotira.md` ... `docs/v0.11-tadqiqot.md`.
 Ustozga ko'rsatish uchun qisqa reja va eng ehtimoliy savollar: [docs/ustozga-korsatish.md](docs/ustozga-korsatish.md).
 
 ---
+
+## Buyruqlar: o'zbekcha va Unix nomlari
+
+Buyruqlar o'zbekcha nomlangan. Xalqaro (Unix) nomlari ham ishlaydi — odat bo'yicha `ls` yoki
+`help` yozilsa ham buyruq bajariladi, lekin ro'yxat va Tab da faqat o'zbekcha nom ko'rinadi.
+`yordam <buyruq>` ikkalasini ko'rsatadi (masalan, `yordam royxat` → "Unix: ls").
+
+| Bo'lim | Buyruq | Unix | Vazifasi |
+|---|---|---|---|
+| Umumiy | `yordam` | `help` | Buyruqlar ro'yxati. yordam <buyruq> - batafsil |
+|  | `tozala` | `clear` | Ekranni tozalash |
+|  | `ayt` | `echo` | Matn chiqarish |
+|  | `haqida` | `about` | OS haqida ma'lumot |
+|  | `kimman` | `whoami` | Muallif haqida |
+|  | `vaqt` | `time` | Sana va vaqt (CMOS soati) |
+|  | `ishvaqti` | `uptime` | Tizim qancha vaqtdan beri ishlayapti |
+|  | `hisobla` | `calc` | Kalkulyator |
+|  | `rang` | `color` | Matn rangi |
+|  | `tarix` | `history` | Kiritilgan buyruqlar tarixi |
+|  | `kut` | `sleep` | N soniya kutish |
+| Fayllar | `royxat` | `ls` | Papka ichidagilar |
+|  | `kir` | `cd` | Papkaga o'tish |
+|  | `qayerda` | `pwd` | Joriy papka |
+|  | `korsat` | `cat` | Fayl mazmuni |
+|  | `tahrir` | `edit` | Matn muharriri |
+|  | `papka` | `mkdir` | Papka yaratish |
+|  | `yarat` | `touch` | Bo'sh fayl yaratish |
+|  | `ochir` | `rm` | O'chirish |
+|  | `nusxala` | `cp` | Nusxa olish |
+|  | `kochir` | `mv` | Ko'chirish / nomini o'zgartirish |
+|  | `daraxt` | `tree` | Papkalar daraxti |
+|  | `malumot` | `stat` | Fayl haqida batafsil (inode, vaqtlar) |
+|  | `joy` | `df` | Fayl tizimlari bandligi |
+| Disk | `disk` | — | Disk va FAT32 haqida ma'lumot |
+|  | `formatla` | `mkfs` | Diskni FAT32 da formatlash |
+|  | `ula` | `mount` | Ulangan fayl tizimlari | ula disk |
+|  | `uz` | `umount` | Fayl tizimini uzish |
+| Xotira | `xotira` | `mem` | Xotira holati |
+|  | `xarita` | `memmap` | BIOS xotira xaritasi |
+|  | `ajrat` | `alloc` | Heap dan xotira olish |
+|  | `bosh` | `free` | Xotirani qaytarish |
+|  | `uyum` | `heap` | Heap bloklari ro'yxati |
+|  | `xotirasinov` | `memtest` | Heap ni avtomatik sinash |
+|  | `tarjima` | `translate` | Virtual -> fizik |
+| Vazifalar | `jarayonlar` | `ps` | Vazifalar ro'yxati va CPU ulushi |
+|  | `deskriptor` | `fds` | Deskriptor jadvallari |
+|  | `yurgiz` | `spawn` | Fon vazifasi |
+|  | `toxtat` | `kill` | Vazifani to'xtatish |
+|  | `reja` | `sched` | Rejalashtirish |
+|  | `ustuvor` | `nice` | Vazifa ustuvorligi |
+|  | `tekshir` | `test` | Kernelni o'z-o'zini tekshirish (tekshir -v - batafsil) |
+|  | `sinx` | — | Sinxronizatsiya |
+| Tizim | `grafik` | `gui` | Grafik rejim |
+|  | `sichqon` | `mouse` | Sichqoncha tezligi |
+|  | `qurilma` | `hw` | Kompyuter haqida hisobot (protsessor, ekran, disk) |
+|  | `pci` | — | PCI qurilmalari ro'yxati |
+|  | `jurnal` | `dmesg` | Kernel jurnali (yuklanishdan beri xabarlar) |
+|  | `nosozlik` | `crash` | Panic sinovi |
+|  | `sahifaxato` | `pagefault` | Page Fault sinovi |
+|  | `qaytayukla` | `reboot` | Qayta yuklash |
+|  | `ochirish` | `shutdown` | O'chirish |
+
+`qobiq` (user rejimidagi shell) ichida: `kir` (cd), `qayerda` (pwd), `chiq` (exit), `yordam` (help).
 
 ## 5. Bosqichlar
 
@@ -251,9 +329,9 @@ Ustozga ko'rsatish uchun qisqa reja va eng ehtimoliy savollar: [docs/ustozga-kor
 | **v0.6.1** ✅ | Kod tekshiruvi: 20+ xato tuzatildi; panic, jurnal, serial, FPU, himoyalar — [batafsil](docs/v0.6.1-mustahkamlash.md) | Ishonchlilik, race condition |
 | **v0.7** ✅ | Grafik rejim, PCI, oyna menejeri, sichqoncha, 7 ta grafik dastur, oyna syscall lari — [batafsil](docs/v0.7-grafika.md) | Grafik quyi tizim, I/O |
 | **v0.8** ✅ | Mutex, semafor, deadlock aniqlash, kanallar, yo'naltirish, `spawn`/`wait`, signallar, preemptive kernel — [batafsil](docs/v0.8-sinxronizatsiya.md) | Sinxronizatsiya, IPC |
-| **v0.9** ✅ | UEFI, grafik konsol, AHCI (SATA, DMA), ichki diskni himoyalash, `hw` — [batafsil](docs/v0.9-haqiqiy-kompyuter.md) | Kiritish-chiqarish, yuklanish |
+| **v0.9** ✅ | UEFI, grafik konsol, AHCI (SATA, DMA), ichki diskni himoyalash, `qurilma` — [batafsil](docs/v0.9-haqiqiy-kompyuter.md) | Kiritish-chiqarish, yuklanish |
 | **v0.10** ✅ | `fork` + copy-on-write, `exec`, `dup2`, har jarayonning o'z fd jadvali va papkasi, user rejimidagi shell — [batafsil](docs/v0.10-fork-exec.md) | Jarayonlar, virtual xotira |
-| v0.11 | Avtomatik testlar, o'lchovlar, scheduler algoritmlarini taqqoslash | Tadqiqot |
+| **v0.11** ✅ | MLFQ, ustuvorlik, lotereya; TSC o'lchovlari; algoritmlarni taqqoslash tadqiqoti; `make test` / `make bench` — [batafsil](docs/v0.11-tadqiqot.md) | Rejalashtirish, unumdorlik |
 | v1.0 | Haqiqiy kompyuterda sinov natijalari, diplom matni, taqdimot | — |
 
 ---
@@ -267,7 +345,7 @@ v0.9 dan boshlab ISO **BIOS va UEFI** da yuklanadi (Linux'da yig'ilgan tayyor `d
 loyiha ildizida). Batafsil, qadamma-qadam: [docs/v0.9-haqiqiy-kompyuter.md](docs/v0.9-haqiqiy-kompyuter.md).
 
 - **UTM**: Emulate → Other → ISO sifatida `diyoros.iso`, x86_64, 512 MB RAM, 1 GB disk; USB'ni
-  o'chiring (yoki "Force PS/2 controller"). Birinchi yuklanishda `mkfs`.
+  o'chiring (yoki "Force PS/2 controller"). Birinchi yuklanishda `formatla`.
 - **Haqiqiy kompyuter**: ISO'ni balenaEtcher bilan USB'ga yozing; BIOS'da Secure Boot — o'chiq,
   SATA — AHCI. Kompyuterning ichki diski **himoyalangan**: DiyorOS uni ulamaydi va formatlamaydi.
   Mac'ning o'zida yuklanmaydi (ARM protsessor).

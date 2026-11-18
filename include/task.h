@@ -26,6 +26,20 @@
 #define TASK_MAX_FDS     16       /* v0.10: bitta jarayonning deskriptor jadvali */
 #define TASK_MAX_CHILDREN 4       /* bitta jarayonning bir vaqtdagi bolalari ("fork bomb" ga qarshi) */
 
+/* v0.11: rejalashtirish algoritmlari (sched buyrug'i bilan almashtiriladi) */
+typedef enum {
+    SCHED_RR = 0,        /* Round-Robin: navbat bilan, teng kvant */
+    SCHED_PRIO,          /* qat'iy ustuvorlik: eng yuqorisi doim birinchi */
+    SCHED_MLFQ,          /* ko'p darajali navbat: CPU ni ko'p yeganlar pastga tushadi */
+    SCHED_LOTTERY,       /* lotereya: ustuvorlik — chiptalar soni, g'olib tasodifiy */
+    SCHED_POLICY_COUNT
+} sched_policy_t;
+
+#define PRIO_MIN      1           /* ustuvorlik: 1 (past) ... 10 (tizim) */
+#define PRIO_DEFAULT  5           /* user dasturlar */
+#define PRIO_SYSTEM   10          /* kernel oqimlari: shell, oyna menejeri, konsol */
+#define MLFQ_LEVELS   3
+
 typedef enum {
     TASK_UNUSED = 0,   /* jadvaldagi bo'sh joy */
     TASK_READY,        /* ishlashga tayyor, navbat kutmoqda */
@@ -90,6 +104,26 @@ typedef struct task {
     int16_t            fd[TASK_MAX_FDS];   /* fd -> ochiq fayl yozuvi (vfs.h: FD_FREE, FD_CONSOLE) */
     struct vfs_node   *cwd;               /* nisbiy yo'llar shu papkadan hisoblanadi */
     uint32_t           forks;             /* fork() orqali yaratilgan (ps: IZOH) */
+
+    /* v0.11: rejalashtirish va o'lchovlar */
+    uint8_t            prio;              /* ustuvorlik 1..10 (PRIO, LOTTERY) */
+    uint8_t            level;             /* MLFQ darajasi: 0 — yuqori */
+    uint16_t           level_used;        /* joriy darajada ishlatgan tick lari */
+    uint32_t           start_tick;        /* yaratilgan payt */
+    uint32_t           first_run_tick;    /* birinchi marta protsessorga chiqqan payt */
+    uint32_t           end_tick;          /* tugagan payt */
+    bool               has_run;
+    bool               woke;              /* READY ga uyg'onib o'tdi (uxlash/kutishdan) */
+    uint64_t           ready_since;       /* TSC: qachondan beri navbatda */
+    uint64_t           ready_wait;        /* jami navbatda kutgan taktlar */
+    uint32_t           wakeups;           /* necha marta uyg'ongan */
+    uint64_t           wake_lat_sum;      /* uyg'onishdan protsessorga chiqqungacha (taktlar) */
+    uint64_t           wake_lat_max;
+    uint32_t           seq;               /* navbatga turgan tartib raqami: kichigi — oldinroq (FIFO) */
+    uint64_t           start_tsc, end_tsc;   /* yaratilgan va tugagan payt (TSC) */
+    uint64_t           first_wait;        /* kelishdan birinchi ishga tushishgacha (taktlar) */
+    uint64_t           run_cycles;        /* protsessorda ishlagan jami taktlar (aniq CPU vaqti) */
+    uint64_t           run_since;         /* joriy ishlash boshlangan payt */
 } task_t;
 
 #define EXIT_KILLED   (-9)      /* kill buyrug'i bilan */
@@ -151,6 +185,16 @@ uint32_t sched_switch_count(void);
 /* FPU (v0.6.1): "lazy" kontekst almashtirish — task.c da tushuntirilgan */
 void     fpu_init(void);
 bool     fpu_handle_nm(registers_t *r);    /* exception #7; false — ishlov berilmadi */
+
+/* v0.11: algoritmni tanlash va sozlash */
+void           sched_set_policy(sched_policy_t p);
+sched_policy_t sched_policy(void);
+const char    *sched_policy_name(sched_policy_t p);
+void           sched_set_quantum(uint32_t ticks);    /* RR, PRIO, LOTTERY kvanti */
+uint32_t       sched_quantum(void);
+void           sched_mlfq_info(const uint32_t **quantum, const uint32_t **allot, uint32_t *boost);
+bool           task_set_prio(uint32_t pid, int prio);
+uint64_t       task_cpu_cycles(void);              /* joriy vazifaning aniq CPU vaqti (taktlar) */
 
 /* Uzilishlar bilan bog'liq (timer.c va idt.c chaqiradi) */
 void         sched_tick(void);

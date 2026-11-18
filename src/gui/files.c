@@ -121,7 +121,7 @@ static void load_locked(files_t *f)
         f->entries[j + 1] = tmp;
     }
     if (dir->mountpoint && !dir->mount)
-        ksnprintf(f->status, sizeof(f->status), "Disk ulanmagan (terminalda: mkfs yoki mount disk)");
+        ksnprintf(f->status, sizeof(f->status), "Disk ulanmagan (terminalda: formatla yoki ula disk)");
     else
         ksnprintf(f->status, sizeof(f->status), "%d ta element", f->count - (f->count && f->entries[0].kind == K_PARENT));
 }

@@ -40,6 +40,21 @@
  *     tiklaymiz (frstor) va dastur davom etadi.
  * Natija: FPU ishlatmaydigan dasturlar uchun xarajat nol.
  *
+ * REJALASHTIRISH ALGORITMLARI (v0.11)
+ * Qaysi vazifa keyingi bo'lishini pick_next hal qiladi. To'rt siyosat:
+ *   RR       — navbat bilan (FIFO), hammaga bir xil kvant (v0.10 gacha yagona algoritm);
+ *   PRIO     — qat'iy ustuvorlik: eng yuqori ustuvorlikdagi tayyor vazifa ishlaydi,
+ *              tenglar orasida — navbat bilan. Past ustuvorlik "och qolishi" mumkin;
+ *   MLFQ     — 3 darajali navbat: yangi vazifa yuqorida (kvant 10 ms), CPU ni ko'p
+ *              ishlatsa pastga tushadi (20, 40 ms). Interaktiv (ko'p uxlaydigan)
+ *              vazifalar yuqorida qoladi. Har 1 soniyada hamma yuqoriga ko'tariladi —
+ *              pastdagilar och qolmaydi. (Corbato, 1962; Linux, Windows, macOS asosi);
+ *   LOTTERY  — har bir vazifada ustuvorligiga teng "chipta"; har kvantda tasodifiy
+ *              chipta tortiladi. O'rtacha protsessor ulushi chiptalarga proporsional
+ *              (Waldspurger, 1994).
+ * O'lchovlar: har vazifa navbatda qancha kutgani va uyg'ongandan keyin qancha
+ * vaqtda protsessorga chiqqani — TSC bilan, mikrosekund aniqlikda (sched, tadqiqot).
+ *
  * FORK VA EXEC (v0.10)
  * Unix da yangi dastur ikki qadamda ishga tushadi:
  *   fork()  — joriy jarayonning NUSXASI (xotira copy-on-write, deskriptorlar,
@@ -60,6 +75,7 @@
 #include "kernel.h"
 #include "klog.h"
 #include "sync.h"
+#include "tsc.h"
 
 static task_t tasks[MAX_TASKS];
 static task_t *current = 0;
@@ -72,6 +88,18 @@ static volatile bool need_resched = false;
 static bool active = false;
 
 static uint32_t foreground_pid = 0;   /* shell kutayotgan (oldingi plandagi) jarayon */
+
+/* v0.11: algoritm */
+/* Standart — MLFQ: v0.11 tajribasida u RR bilan bir xil o'tkazish qobiliyatida interaktiv
+   vazifalarga 20-60 baravar tezroq javob berdi (docs/v0.11-tadqiqot.md) */
+static sched_policy_t policy = SCHED_MLFQ;
+static uint32_t rr_quantum = SCHED_QUANTUM;
+static const uint32_t mlfq_quantum[MLFQ_LEVELS] = { 1, 2, 4 };   /* tick: 10, 20, 40 ms */
+static const uint32_t mlfq_allot[MLFQ_LEVELS]   = { 2, 4, 0 };   /* darajada jami; 0 — cheksiz */
+#define MLFQ_BOOST 100                                           /* har 100 tick (1 s) — hammasi yuqoriga */
+static uint32_t boost_left = MLFQ_BOOST;
+static uint32_t rng_state = 1;
+static uint32_t ready_seq = 0;      /* navbatga turish tartibi (FIFO) */
 
 static bool    fpu_present = false;
 static task_t *fpu_owner = 0;         /* FPU registrlarida hozir kimning holati turibdi */
@@ -99,6 +127,39 @@ static task_t *alloc_slot(void)
     return 0;
 }
 
+/* Vazifa navbatga turdi: TSC vaqtini eslab qolamiz (kutish va javob vaqtini o'lchash uchun) */
+static void set_ready(task_t *t, bool wake)
+{
+    t->state = TASK_READY;
+    t->ready_since = rdtsc();
+    t->woke = wake;
+    t->seq = ++ready_seq;               /* navbat oxiriga */
+}
+
+/*
+ * Uyg'ongan vazifa joriysini darhol to'xtatishi kerakmi? Faqat undan "muhimroq"
+ * bo'lsa: PRIO da ustuvorligi yuqori, MLFQ da darajasi yuqori. RR va lotereyada —
+ * yo'q: uyg'ongan vazifa navbat oxiriga turadi, joriysi kvantini oxirigacha ishlaydi.
+ * Protsessor bo'sh (idle) bo'lsa — doim darhol.
+ */
+static bool preempts(const task_t *t)
+{
+    if (!current || current == idle_task || current->state != TASK_RUNNING)
+        return true;
+    if (policy == SCHED_PRIO)
+        return t->prio > current->prio;
+    if (policy == SCHED_MLFQ)
+        return t->level < current->level;
+    return false;
+}
+
+static void wake_up(task_t *t)
+{
+    set_ready(t, true);
+    if (preempts(t))
+        need_resched = true;
+}
+
 void sched_init(void)
 {
     memset(tasks, 0, sizeof(tasks));
@@ -110,6 +171,9 @@ void sched_init(void)
     shell_task->pid = next_pid++;
     strcpy(shell_task->name, "shell");
     shell_task->state = TASK_RUNNING;
+    shell_task->prio = PRIO_SYSTEM;
+    shell_task->has_run = true;
+    shell_task->run_since = shell_task->start_tsc = rdtsc();
     shell_task->pgid = shell_task->pid;
     vfs_fdt_init(shell_task->fd);                  /* 0, 1, 2 — klaviatura va ekran */
     shell_task->cwd = vfs_cwd();                   /* rootfs o'rnatgan papka (/home/diyorbek) */
@@ -126,6 +190,7 @@ void sched_init(void)
     idle_task->pid = 0;                /* an'anaga ko'ra idle — PID 0 */
     idle_task->pgid = 0;
     next_pid = 2;
+    rng_state = (uint32_t)rdtsc() | 1;
 
     active = true;
 }
@@ -174,7 +239,10 @@ uint32_t task_create(const char *name, task_entry_t entry, uint32_t arg)
     r->eip    = (uint32_t)task_trampoline;
     r->eflags = 0x202;                       /* IF=1: uzilishlar yoqilgan */
     t->regs   = r;
-    t->state  = TASK_READY;
+    t->prio   = PRIO_SYSTEM;
+    t->start_tick = timer_ticks();
+    t->start_tsc = rdtsc();
+    set_ready(t, false);
 
     uint32_t pid = t->pid;
     irq_restore(flags);
@@ -242,6 +310,8 @@ static void make_zombie(task_t *t, int32_t code)
 {
     t->state = TASK_ZOMBIE;
     t->exit_code = code;
+    t->end_tick = timer_ticks();
+    t->end_tsc = rdtsc();
     if (fpu_owner == t)
         fpu_owner = 0;                 /* uning FPU holati endi hech kimga kerak emas */
     sync_task_died(t);                 /* navbatlardan chiqarish, ushlagan mutexlarini bo'shatish */
@@ -284,7 +354,7 @@ bool task_kill(uint32_t pid)
         }
         task_t *k = task_find(pid);
         if (k)
-            strcpy(k->note, "o'ldirildi (kill)");
+            strcpy(k->note, "o'ldirildi (toxtat)");
         task_reap();
         return true;
     }
@@ -306,13 +376,13 @@ bool task_kill(uint32_t pid)
         flags = irq_save();
         t = task_find(pid);
         if (t)
-            strcpy(t->note, "o'ldirildi (kill)");
+            strcpy(t->note, "o'ldirildi (toxtat)");
         irq_restore(flags);
         task_reap();
         return true;
     }
     make_zombie(t, EXIT_KILLED);
-    strcpy(t->note, "o'ldirildi (kill)");
+    strcpy(t->note, "o'ldirildi (toxtat)");
     irq_restore(flags);
     task_reap();
     return true;
@@ -534,7 +604,10 @@ uint32_t task_create_user(const char *name, uint32_t *page_dir, uint32_t entry,
     r->useresp = user_esp;
     r->ss      = USER_DS;
     t->regs    = r;
-    t->state   = TASK_READY;
+    t->prio    = PRIO_DEFAULT;
+    t->start_tick = timer_ticks();
+    t->start_tsc = rdtsc();
+    set_ready(t, false);
 
     uint32_t pid = t->pid;
     irq_restore(flags);
@@ -612,7 +685,10 @@ int32_t task_fork(registers_t *r)
     *cr = *r;
     cr->eax  = 0;                                  /* bolada fork() natijasi — 0 */
     t->regs  = cr;
-    t->state = TASK_READY;
+    t->prio  = current->prio;
+    t->start_tick = timer_ticks();
+    t->start_tsc = rdtsc();
+    set_ready(t, false);
 
     uint32_t pid = t->pid;
     irq_restore(flags);
@@ -691,10 +767,8 @@ void task_block(void)
 
 void task_unblock(task_t *t)
 {
-    if (t && t->state == TASK_BLOCKED) {
-        t->state = TASK_READY;
-        need_resched = true;           /* tez javob berish uchun darhol almashamiz */
-    }
+    if (t && t->state == TASK_BLOCKED)
+        wake_up(t);                    /* muhimroq bo'lsa — darhol almashamiz */
 }
 
 /*
@@ -704,10 +778,8 @@ void task_unblock(task_t *t)
  */
 void task_wake(task_t *t)
 {
-    if (t && (t->state == TASK_SLEEPING || t->state == TASK_BLOCKED)) {
-        t->state = TASK_READY;
-        need_resched = true;
-    }
+    if (t && (t->state == TASK_SLEEPING || t->state == TASK_BLOCKED))
+        wake_up(t);
 }
 
 task_t *task_current(void)
@@ -738,10 +810,8 @@ void sched_tick(void)
 
     /* Uxlayotganlarni uyg'otish */
     for (int i = 0; i < MAX_TASKS; i++)
-        if (tasks[i].state == TASK_SLEEPING && (int32_t)(now - tasks[i].wake_tick) >= 0) {
-            tasks[i].state = TASK_READY;
-            need_resched = true;
-        }
+        if (tasks[i].state == TASK_SLEEPING && (int32_t)(now - tasks[i].wake_tick) >= 0)
+            wake_up(&tasks[i]);
 
     /* Har soniyada CPU% ni hisoblash: oxirgi 100 tickdan nechtasini olgan */
     if (now % TIMER_HZ == 0)
@@ -751,6 +821,26 @@ void sched_tick(void)
             t->cpu_prev = t->cpu_ticks;
         }
 
+    /* v0.11 MLFQ: kvantini to'liq ishlatgan vazifa darajada "jami ruxsat" ini sarflaydi.
+       Jami hisoblanadi (bitta kvant emas): aks holda dastur kvant tugashidan sal oldin
+       uxlab, abadiy yuqorida qolib ketardi (Arpaci-Dusseau, OSTEP, 8-bob) */
+    if (policy == SCHED_MLFQ) {
+        if (current != idle_task && mlfq_allot[current->level] &&
+            ++current->level_used >= mlfq_allot[current->level]) {
+            current->level++;
+            current->level_used = 0;
+            need_resched = true;
+        }
+        if (--boost_left == 0) {           /* ko'tarish: pastda och qolganlar ham navbat oladi */
+            boost_left = MLFQ_BOOST;
+            for (int i = 0; i < MAX_TASKS; i++) {
+                tasks[i].level = 0;
+                tasks[i].level_used = 0;
+            }
+            need_resched = true;
+        }
+    }
+
     /* Kvant tugadimi? */
     if (slice_left > 0)
         slice_left--;
@@ -758,17 +848,99 @@ void sched_tick(void)
         need_resched = true;
 }
 
-/* Keyingi ishlaydigan vazifani tanlash: Round-Robin */
+static inline bool runnable(const task_t *t)
+{
+    return t != idle_task && t->state == TASK_READY;
+}
+
+/* a navbatda b dan oldinmi (raqam aylanib ketsa ham to'g'ri) */
+static inline bool earlier(const task_t *a, const task_t *b)
+{
+    return (int32_t)(a->seq - b->seq) < 0;
+}
+
+/* xorshift32 — oddiy tez tasodifiy sonlar generatori (lotereya uchun) */
+static uint32_t rand32(void)
+{
+    uint32_t x = rng_state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    return rng_state = x;
+}
+
+/*
+ * Keyingi ishlaydigan vazifani tanlash. Tayyor vazifalar FIFO navbatda: kim
+ * oldin navbatga turgan bo'lsa (seq kichik), o'sha oldin. RR — faqat shu qoida;
+ * PRIO — avval ustuvorlik, tenglar orasida FIFO; MLFQ — avval daraja, keyin FIFO.
+ * Joriy vazifa kvanti tugaganda navbat OXIRIGA turadi (switch_to).
+ */
 static task_t *pick_next(void)
 {
-    int start = (int)(current - tasks);
-    for (int k = 1; k <= MAX_TASKS; k++) {
-        task_t *t = &tasks[(start + k) % MAX_TASKS];
-        if (t != idle_task && (t->state == TASK_READY ||
-                               (t == current && t->state == TASK_RUNNING)))
-            return t;
+    if (policy == SCHED_LOTTERY) {
+        uint32_t total = 0;
+        for (int i = 0; i < MAX_TASKS; i++)
+            if (runnable(&tasks[i]))
+                total += tasks[i].prio;
+        if (!total)
+            return idle_task;
+        uint32_t win = rand32() % total;           /* yutuqli chipta */
+        for (int i = 0; i < MAX_TASKS; i++) {
+            if (!runnable(&tasks[i]))
+                continue;
+            if (win < tasks[i].prio)
+                return &tasks[i];
+            win -= tasks[i].prio;
+        }
+        return idle_task;
     }
-    return idle_task;                  /* hech kim tayyor emas */
+
+    task_t *best = 0;
+    for (int i = 0; i < MAX_TASKS; i++) {
+        task_t *t = &tasks[i];
+        if (!runnable(t))
+            continue;
+        if (!best) {
+            best = t;
+            continue;
+        }
+        if (policy == SCHED_PRIO && t->prio != best->prio) {
+            if (t->prio > best->prio)
+                best = t;
+        } else if (policy == SCHED_MLFQ && t->level != best->level) {
+            if (t->level < best->level)
+                best = t;
+        } else if (earlier(t, best)) {
+            best = t;                              /* teng: oldin kelgani */
+        }
+    }
+    return best ? best : idle_task;                /* hech kim tayyor emas */
+}
+
+static uint32_t quantum_of(const task_t *t)
+{
+    return policy == SCHED_MLFQ ? mlfq_quantum[t->level] : rr_quantum;
+}
+
+/* Protsessorga chiqayotgan vazifa: navbatda qancha kutdi (o'lchov) */
+static void account_switch_in(task_t *t)
+{
+    if (t->state == TASK_READY) {
+        uint64_t waited = rdtsc() - t->ready_since;
+        t->ready_wait += waited;
+        if (!t->has_run)
+            t->first_wait = waited;            /* javob vaqti (response time) */
+        if (t->woke) {
+            t->wakeups++;
+            t->wake_lat_sum += waited;
+            if (waited > t->wake_lat_max)
+                t->wake_lat_max = waited;
+        }
+    }
+    if (!t->has_run) {
+        t->has_run = true;
+        t->first_run_tick = timer_ticks();
+    }
 }
 
 /* Joriy vazifaning steki butunmi? (qo'riqchi qiymat joyida va joy qolgan) */
@@ -789,17 +961,20 @@ static registers_t *switch_to(registers_t *r)
     check_stack(current, r);
     current->regs = r;                 /* joriy vazifa qayerda to'xtaganini eslab qolamiz */
 
-    task_t *next = pick_next();
+    uint64_t now = rdtsc();
+    current->run_cycles += now - current->run_since;   /* aniq CPU vaqti */
     if (current->state == TASK_RUNNING)
-        current->state = TASK_READY;
-
+        set_ready(current, false);             /* kvant tugadi yoki to'xtatildi — navbat oxiriga */
+    task_t *next = pick_next();
+    next->run_since = now;
     if (next != current) {
+        account_switch_in(next);
         switch_count++;
         next->switches++;
     }
     current = next;
     current->state = TASK_RUNNING;
-    slice_left = SCHED_QUANTUM;
+    slice_left = quantum_of(current);
 
     /* v0.5: jarayonning xotirasi (CR3) va kernel steki (TSS.esp0) */
     if (current->user)
@@ -837,6 +1012,69 @@ registers_t *sched_yield_handler(registers_t *r)
     if (!active)
         return r;
     return switch_to(r);
+}
+
+/* -------------------------- Algoritmni tanlash (v0.11) -------------------------- */
+
+void sched_set_policy(sched_policy_t p)
+{
+    if (p >= SCHED_POLICY_COUNT)
+        return;
+    uint32_t flags = irq_save();
+    policy = p;
+    boost_left = MLFQ_BOOST;
+    for (int i = 0; i < MAX_TASKS; i++) {
+        tasks[i].level = 0;
+        tasks[i].level_used = 0;
+    }
+    need_resched = true;
+    irq_restore(flags);
+}
+
+sched_policy_t sched_policy(void) { return policy; }
+
+uint64_t task_cpu_cycles(void)
+{
+    uint32_t flags = irq_save();
+    uint64_t c = current->run_cycles + (rdtsc() - current->run_since);
+    irq_restore(flags);
+    return c;
+}
+
+const char *sched_policy_name(sched_policy_t p)
+{
+    static const char *names[] = { "rr", "prio", "mlfq", "lotereya" };
+    return p < SCHED_POLICY_COUNT ? names[p] : "?";
+}
+
+void sched_set_quantum(uint32_t ticks)
+{
+    if (ticks < 1)
+        ticks = 1;
+    if (ticks > 100)
+        ticks = 100;
+    rr_quantum = ticks;
+}
+
+uint32_t sched_quantum(void) { return rr_quantum; }
+
+void sched_mlfq_info(const uint32_t **quantum, const uint32_t **allot, uint32_t *boost)
+{
+    *quantum = mlfq_quantum;
+    *allot = mlfq_allot;
+    *boost = MLFQ_BOOST;
+}
+
+bool task_set_prio(uint32_t pid, int prio)
+{
+    if (prio < PRIO_MIN || prio > PRIO_SYSTEM)
+        return false;
+    uint32_t flags = irq_save();
+    task_t *t = task_find(pid);
+    if (t && t != idle_task)
+        t->prio = (uint8_t)prio;
+    irq_restore(flags);
+    return t && t != idle_task;
 }
 
 /* ------------------------------- FPU (v0.6.1) ------------------------------- */

@@ -1,14 +1,14 @@
 /*
  * cmd_memory.c — xotira bilan bog'liq shell buyruqlari (v0.2).
  *
- *   mem        — umumiy holat: RAM, frame lar, paging, heap
- *   memmap     — BIOS bergan xotira xaritasi
- *   alloc N    — heap dan N bayt ajratish (kmalloc)
- *   free ADDR  — ajratilgan xotirani qaytarish (kfree)
- *   heap       — heap dagi barcha bloklar ro'yxati
- *   memtest    — heap ni avtomatik sinash
- *   translate  — virtual manzilni fizik manzilga aylantirish
- *   pagefault  — ataylab Page Fault chaqirish
+ *   xotira     — umumiy holat: RAM, frame lar, paging, heap
+ *   xarita     — BIOS bergan xotira xaritasi
+ *   ajrat N    — heap dan N bayt ajratish (kmalloc)
+ *   bosh ADDR  — ajratilgan xotirani qaytarish (kfree)
+ *   uyum       — heap dagi barcha bloklar ro'yxati
+ *   xotirasinov    — heap ni avtomatik sinash
+ *   tarjima    — virtual manzilni fizik manzilga aylantirish
+ *   sahifaxato  — ataylab Page Fault chaqirish
  */
 #include <stdint.h>
 #include <stdbool.h>
@@ -117,7 +117,7 @@ void cmd_alloc(const char *args)
 {
     uint32_t size;
     if (!parse_number(args, &size) || size == 0 || size > 64 * 1024 * 1024) {
-        kprintf("Foydalanish: alloc <bayt>   masalan: alloc 100\n");
+        kprintf("Foydalanish: ajrat <bayt>   masalan: ajrat 100\n");
         return;
     }
     uint8_t *p = kmalloc(size);
@@ -129,14 +129,14 @@ void cmd_alloc(const char *args)
     uint32_t phys = 0;
     paging_translate((uint32_t)p, &phys);
     kprintf("Ajratildi: %u bayt, virtual 0x%x -> fizik 0x%x\n", size, (uint32_t)p, phys);
-    kprintf("Bo'shatish uchun: free 0x%x\n", (uint32_t)p);
+    kprintf("Bo'shatish uchun: bosh 0x%x\n", (uint32_t)p);
 }
 
 void cmd_free(const char *args)
 {
     uint32_t addr;
     if (!parse_number(args, &addr)) {
-        kprintf("Foydalanish: free <manzil>   masalan: free 0xD0000018\n");
+        kprintf("Foydalanish: bosh <manzil>   masalan: bosh 0xD0000018\n");
         return;
     }
     heap_stats_t before, after;
@@ -235,7 +235,7 @@ void cmd_translate(const char *args)
 {
     uint32_t virt, phys;
     if (!parse_number(args, &virt)) {
-        kprintf("Foydalanish: translate <manzil>   masalan: translate 0xD0000000\n");
+        kprintf("Foydalanish: tarjima <manzil>   masalan: tarjima 0xD0000000\n");
         return;
     }
     uint32_t pd = virt >> 22, pt = (virt >> 12) & 0x3FF, off = virt & 0xFFF;

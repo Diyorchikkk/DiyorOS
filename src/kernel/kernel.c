@@ -15,7 +15,9 @@
 #include <stdint.h>
 #include "config.h"
 #include "multiboot.h"
+#include "tsc.h"
 #include "fbcon.h"
+#include "tests.h"
 #include "kernel.h"
 #include "vga.h"
 #include "kprintf.h"
@@ -131,6 +133,19 @@ const char *boot_loader_name(void)
     return loader[0] ? loader : "Multiboot";
 }
 
+/* v0.11: yuklash satri ("make test" -> QEMU -append test). Multiboot ma'lumoti keyin
+   ustidan yozilishi mumkin — darhol nusxalaymiz */
+static char cmdline[64];
+
+bool kernel_cmdline_has(const char *word)
+{
+    size_t n = strlen(word);
+    for (const char *p = cmdline; *p; p++)
+        if ((p == cmdline || p[-1] == ' ') && strncmp(p, word, n) == 0 && (p[n] == 0 || p[n] == ' '))
+            return true;
+    return false;
+}
+
 void kernel_main(uint32_t magic, multiboot_info_t *mbi)
 {
     serial_init();               /* eng birinchi: keyingi har bir xabar serial portga ham chiqadi */
@@ -140,6 +155,8 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
     bool graphic_console = magic == MULTIBOOT_BOOTLOADER_MAGIC && fbcon_early(mbi);
     if (magic == MULTIBOOT_BOOTLOADER_MAGIC && (mbi->flags & MULTIBOOT_FLAG_LOADER) && mbi->boot_loader_name)
         strncpy(loader, (const char *)mbi->boot_loader_name, sizeof(loader) - 1);
+    if (magic == MULTIBOOT_BOOTLOADER_MAGIC && (mbi->flags & MULTIBOOT_FLAG_CMDLINE) && mbi->cmdline)
+        strncpy(cmdline, (const char *)mbi->cmdline, sizeof(cmdline) - 1);
 
     vga_init();
     status_bar_update(0);
@@ -190,10 +207,10 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
     pci_init();
     boot_msg(true, "PCI shinasi: %d ta qurilma topildi", pci_count());
     if (fb_detect() && fb_info()->boot)
-        boot_msg(fb_info()->available, fb_info()->available ? "Grafik interfeys: bootloader ekranida (gui)"
+        boot_msg(fb_info()->available, fb_info()->available ? "Grafik interfeys: bootloader ekranida (grafik)"
                                                              : "Grafik interfeys: ekran formati mos emas (faqat matn)");
     else if (fb_info()->available)
-        boot_msg(true, "Videokarta: Bochs VBE, %u MB xotira (grafik rejim: gui)",
+        boot_msg(true, "Videokarta: Bochs VBE, %u MB xotira (grafik rejim: grafik)",
                  fb_info()->vram_bytes / (1024 * 1024));
     else
         boot_msg(false, "Grafik adapter topilmadi (faqat matn rejimi)");
@@ -217,7 +234,7 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
         /* Haqiqiy kompyuterning ichki diski: DiyorOS unga tegmaydi */
         boot_msg(false, "Disk boshqa OS ga tegishli - ulanmadi, fayllar xotirada saqlanadi");
     } else {
-        boot_msg(false, "Disk FAT32 da formatlanmagan. Formatlash: mkfs");
+        boot_msg(false, "Disk FAT32 da formatlanmagan. Formatlash: formatla");
     }
 
     timer_init(TIMER_HZ);
@@ -238,13 +255,18 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi)
     __asm__ volatile ("sti");    /* uzilishlarni yoqamiz — endi IRQ lar keladi */
     boot_msg(true, "Uzilishlar yoqildi");
 
+    tsc_calibrate();             /* v0.11: aniq vaqt o'lchash uchun protsessor taktlari */
+    if (tsc_khz())
+        boot_msg(true, "TSC: protsessor chastotasi ~%u MHz (mikrosekund o'lchovlari)", tsc_khz() / 1000);
+
     sched_init();                /* shu oqim "shell" vazifasiga aylanadi, idle yaratiladi */
     fbcon_start();               /* grafik konsol: ekranni chizuvchi oqim */
-    boot_msg(true, "Scheduler ishga tushdi (Round-Robin, kvant %u ms)",
-             SCHED_QUANTUM * 1000 / TIMER_HZ);
+    boot_msg(true, "Scheduler ishga tushdi: MLFQ (3 daraja, 10/20/40 ms); yana: rr, prio, lotereya");
     boot_msg(true, "Sinxronizatsiya: mutex, semafor, kanallar (pipe); kernel preemptive");
 
     print_banner();
+    if (kernel_cmdline_has("test") || kernel_cmdline_has("bench"))
+        auto_run();              /* v0.11: avtomatik sinov / o'lchov — tugagach kompyuter o'chadi */
     shell_run();                 /* bu funksiyadan hech qachon qaytilmaydi */
     panic("shell_run qaytdi");
 }

@@ -1,19 +1,19 @@
 /*
  * cmd_fs.c — fayl tizimi buyruqlari (v0.4).
  *
- *   ls [yo'l]            papka ichidagilar
- *   cd [yo'l]            joriy papkani o'zgartirish (bo'sh: uy papkasi)
- *   pwd                  joriy papka
- *   mkdir <yo'l>         papka yaratish
- *   touch <yo'l>         bo'sh fayl yaratish
- *   rm [-r] <yo'l>       o'chirish (-r: papkani ichidagilari bilan)
- *   cat <fayl>           fayl mazmuni
- *   cp <manba> <nusxa>   nusxa olish
- *   mv <manba> <yangi>   ko'chirish / nomini o'zgartirish
- *   tree [yo'l]          papkalar daraxti
- *   stat <yo'l>          fayl haqida batafsil (inode, vaqtlar)
+ *   royxat [yo'l]        papka ichidagilar
+ *   kir [yo'l]           joriy papkani o'zgartirish (bo'sh: uy papkasi)
+ *   qayerda              joriy papka
+ *   papka <yo'l>         papka yaratish
+ *   yarat <yo'l>         bo'sh fayl yaratish
+ *   ochir [-r] <yo'l>    o'chirish (-r: papkani ichidagilari bilan)
+ *   korsat <fayl>        fayl mazmuni
+ *   nusxala <manba> <nusxa>   nusxa olish
+ *   kochir <manba> <yangi>   ko'chirish / nomini o'zgartirish
+ *   daraxt [yo'l]        papkalar daraxti
+ *   malumot <yo'l>       fayl haqida batafsil (inode, vaqtlar)
  *   wc <fayl>            qator, so'z va baytlar soni
- *   df                   fayl tizimi bandligi
+ *   joy                  fayl tizimi bandligi
  *
  * Barcha buyruqlar faqat VFS funksiyalaridan foydalanadi — qaysi fayl
  * tizimi (ramfs yoki procfs) ekanini bilishmaydi.
@@ -136,7 +136,7 @@ static void ls_locked(const char *args)
     vfs_node_t *n;
     int err = vfs_lookup(path, &n);
     if (err) {
-        fs_error("ls", path, err);
+        fs_error("royxat", path, err);
         return;
     }
     if (n->type != VFS_DIR) {
@@ -169,7 +169,7 @@ void cmd_cd(const char *args)
         strcpy(path, HOME_DIR);
     int err = vfs_chdir(path);
     if (err)
-        fs_error("cd", path, err);
+        fs_error("kir", path, err);
 }
 
 void cmd_pwd(const char *args)
@@ -185,12 +185,12 @@ void cmd_mkdir(const char *args)
     char path[VFS_PATH_MAX];
     take_word(args, path, sizeof(path));
     if (!path[0]) {
-        kprintf("Foydalanish: mkdir <papka>\n");
+        kprintf("Foydalanish: papka <nom>\n");
         return;
     }
     int err = vfs_mkdir(path);
     if (err)
-        fs_error("mkdir", path, err);
+        fs_error("papka", path, err);
 }
 
 static void touch_locked(const char *args)
@@ -198,7 +198,7 @@ static void touch_locked(const char *args)
     char path[VFS_PATH_MAX];
     take_word(args, path, sizeof(path));
     if (!path[0]) {
-        kprintf("Foydalanish: touch <fayl>\n");
+        kprintf("Foydalanish: yarat <fayl>\n");
         return;
     }
     vfs_node_t *n;
@@ -209,7 +209,7 @@ static void touch_locked(const char *args)
     }
     int err = vfs_create(path, 0);
     if (err)
-        fs_error("touch", path, err);
+        fs_error("yarat", path, err);
 }
 
 void cmd_rm(const char *args)
@@ -222,12 +222,12 @@ void cmd_rm(const char *args)
         take_word(rest, word, sizeof(word));
     }
     if (!word[0]) {
-        kprintf("Foydalanish: rm [-r] <yo'l>\n");
+        kprintf("Foydalanish: ochir [-r] <yo'l>\n");
         return;
     }
     int err = vfs_remove(word, recursive);
     if (err)
-        fs_error("rm", word, err);
+        fs_error("ochir", word, err);
 }
 
 void cmd_cat(const char *args)
@@ -235,12 +235,12 @@ void cmd_cat(const char *args)
     char path[VFS_PATH_MAX];
     take_word(args, path, sizeof(path));
     if (!path[0]) {
-        kprintf("Foydalanish: cat <fayl>\n");
+        kprintf("Foydalanish: korsat <fayl>\n");
         return;
     }
     int fd = vfs_open(path, VFS_O_READ);
     if (fd < 0) {
-        fs_error("cat", path, fd);
+        fs_error("korsat", path, fd);
         return;
     }
 
@@ -268,7 +268,7 @@ void cmd_cp(const char *args)
     const char *rest = take_word(args, src, sizeof(src));
     take_word(rest, dst, sizeof(dst));
     if (!src[0] || !dst[0]) {
-        kprintf("Foydalanish: cp <manba> <nusxa>\n");
+        kprintf("Foydalanish: nusxala <manba> <nusxa>\n");
         return;
     }
 
@@ -284,20 +284,20 @@ void cmd_cp(const char *args)
     if (vfs_lookup(src, &sn) == VFS_OK && vfs_lookup(dst, &dn) == VFS_OK && sn == dn) {
         save_color();
         with_color(VGA_LIGHT_RED);
-        kprintf("cp: manba va nusxa bitta fayl\n");
+        kprintf("nusxala: manba va nusxa bitta fayl\n");
         restore_color();
         return;
     }
 
     int in = vfs_open(src, VFS_O_READ);
     if (in < 0) {
-        fs_error("cp", src, in);
+        fs_error("nusxala", src, in);
         return;
     }
     int out = vfs_open(dst, VFS_O_WRITE | VFS_O_CREATE | VFS_O_TRUNC);
     if (out < 0) {
         vfs_close(in);
-        fs_error("cp", dst, out);
+        fs_error("nusxala", dst, out);
         return;
     }
 
@@ -307,17 +307,17 @@ void cmd_cp(const char *args)
     while ((n = vfs_read(in, buf, sizeof(buf))) > 0) {
         int32_t w = vfs_write(out, buf, (uint32_t)n);
         if (w < 0) {
-            fs_error("cp", dst, w);
+            fs_error("nusxala", dst, w);
             break;
         }
         total += (uint32_t)w;
         if (w < n) {                         /* qisman yozildi: diskda joy tugadi */
-            fs_error("cp", dst, VFS_ENOSPC);
+            fs_error("nusxala", dst, VFS_ENOSPC);
             break;
         }
     }
     if (n < 0)
-        fs_error("cp", src, n);
+        fs_error("nusxala", src, n);
     vfs_close(in);
     vfs_close(out);
     kprintf("%u bayt nusxalandi\n", total);
@@ -329,12 +329,12 @@ void cmd_mv(const char *args)
     const char *rest = take_word(args, src, sizeof(src));
     take_word(rest, dst, sizeof(dst));
     if (!src[0] || !dst[0]) {
-        kprintf("Foydalanish: mv <manba> <yangi joy yoki nom>\n");
+        kprintf("Foydalanish: kochir <manba> <yangi joy yoki nom>\n");
         return;
     }
     int err = vfs_rename(src, dst);
     if (err)
-        fs_error("mv", src, err);
+        fs_error("kochir", src, err);
 }
 
 static void tree_walk(vfs_node_t *dir, char *prefix, int depth, uint32_t *files, uint32_t *dirs)
@@ -371,11 +371,11 @@ static void tree_locked(const char *args)
     vfs_node_t *n;
     int err = vfs_lookup(path, &n);
     if (err) {
-        fs_error("tree", path, err);
+        fs_error("daraxt", path, err);
         return;
     }
     if (n->type != VFS_DIR) {
-        fs_error("tree", path, VFS_ENOTDIR);
+        fs_error("daraxt", path, VFS_ENOTDIR);
         return;
     }
     char full[VFS_PATH_MAX];
@@ -396,13 +396,13 @@ static void stat_locked(const char *args)
     char path[VFS_PATH_MAX];
     take_word(args, path, sizeof(path));
     if (!path[0]) {
-        kprintf("Foydalanish: stat <yo'l>\n");
+        kprintf("Foydalanish: malumot <yo'l>\n");
         return;
     }
     vfs_node_t *n;
     int err = vfs_lookup(path, &n);
     if (err) {
-        fs_error("stat", path, err);
+        fs_error("malumot", path, err);
         return;
     }
     char full[VFS_PATH_MAX];
@@ -485,7 +485,7 @@ bool shell_redirect(const char *args)
     char path[VFS_PATH_MAX];
     take_word(gt + (append ? 2 : 1), path, sizeof(path));
     if (!path[0]) {
-        kprintf("echo: '>' dan keyin fayl nomi kerak\n");
+        kprintf("ayt: '>' dan keyin fayl nomi kerak\n");
         return true;
     }
 
@@ -496,14 +496,14 @@ bool shell_redirect(const char *args)
     uint32_t flags = VFS_O_WRITE | VFS_O_CREATE | (append ? VFS_O_APPEND : VFS_O_TRUNC);
     int fd = vfs_open(path, flags);
     if (fd < 0) {
-        fs_error("echo", path, fd);
+        fs_error("ayt", path, fd);
         return true;
     }
     int32_t w = vfs_write(fd, args, len);
     if (w >= 0)
         w = vfs_write(fd, "\n", 1);
     if (w < 0)
-        fs_error("echo", path, w);
+        fs_error("ayt", path, w);
     vfs_close(fd);
     return true;
 }

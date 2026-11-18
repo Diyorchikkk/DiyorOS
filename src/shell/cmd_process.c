@@ -1,10 +1,10 @@
 /*
  * cmd_process.c — vazifalar bilan bog'liq shell buyruqlari (v0.3).
  *
- *   ps                 — barcha vazifalar: holati, CPU ulushi
- *   spawn <nom> [N]    — fon vazifasini ishga tushirish
- *   kill <PID>         — vazifani to'xtatish
- *   sched              — scheduler statistikasi
+ *   jarayonlar         — barcha vazifalar: holati, CPU ulushi
+ *   yurgiz <nom> [N]   — fon vazifasini ishga tushirish
+ *   toxtat <PID>       — vazifani to'xtatish
+ *   reja               — scheduler statistikasi
  *
  * Demo vazifalar (spawn bilan ishga tushiriladi):
  *   spinner — status barda aylanuvchi belgi: shell bilan PARALLEL ishlashni ko'rsatadi
@@ -24,6 +24,8 @@
 #include "config.h"
 #include "memory.h"
 #include "vfs.h"
+#include "tsc.h"
+#include "tests.h"
 #include "sync.h"
 #include "gui.h"
 
@@ -195,7 +197,7 @@ void cmd_fds(const char *args)
     (void)args;
     char *buf = kmalloc(4096);
     if (!buf) {
-        kprintf("fds: xotira yetmadi\n");
+        kprintf("deskriptor: xotira yetmadi\n");
         return;
     }
     vfs_fd_report(buf, 4096);
@@ -269,14 +271,14 @@ void cmd_spawn(const char *args)
     } else if (strcmp(name, "primes") == 0) {
         uint32_t limit = 10000000;
         if (num[0] && (!to_uint(num, &limit) || limit < 10)) {
-            kprintf("Foydalanish: spawn primes [N]   masalan: spawn primes 1000000\n");
+            kprintf("Foydalanish: yurgiz primes [N]   masalan: yurgiz primes 1000000\n");
             return;
         }
         pid = task_create("primes", primes_task, limit);
     } else if (strcmp(name, "busy") == 0) {
         pid = task_create("busy", busy_task, 0);
     } else {
-        kprintf("Foydalanish: spawn <spinner | primes [N] | busy>\n");
+        kprintf("Foydalanish: yurgiz <spinner | primes [N] | busy>\n");
         kprintf("  spinner  status barda aylanuvchi belgi (fon vazifasi)\n");
         kprintf("  primes   N gacha tub sonlarni sanaydi va tugaydi\n");
         kprintf("  busy     cheksiz hisoblaydi (preemption sinovi)\n");
@@ -295,7 +297,7 @@ void cmd_kill(const char *args)
     uint32_t pid;
     next_word(args, num, sizeof(num));
     if (!to_uint(num, &pid)) {
-        kprintf("Foydalanish: kill <PID>   (PID larni 'ps' ko'rsatadi)\n");
+        kprintf("Foydalanish: toxtat <PID>   (PID larni 'jarayonlar' ko'rsatadi)\n");
         return;
     }
     if (pid == 0 || pid == 1) {
@@ -317,22 +319,118 @@ void cmd_kill(const char *args)
     }
 }
 
+/* Satr boshidagi bo'shliqlardan keyingi musbat son (yo'q bo'lsa — 0) */
+static int atoi(const char *s)
+{
+    while (*s == ' ')
+        s++;
+    int v = 0;
+    while (*s >= '0' && *s <= '9')
+        v = v * 10 + (*s++ - '0');
+    return v;
+}
+
+static void sched_usage(void)
+{
+    kprintf("Foydalanish:\n"
+            "  reja                  holat: algoritm va vazifalar statistikasi\n"
+            "  reja rr [ms]          Round-Robin (kvant 10..1000 ms, standart 50)\n"
+            "  reja prio             qat'iy ustuvorlik (ustuvor PID N bilan sozlanadi)\n"
+            "  reja mlfq             ko'p darajali navbat (10/20/40 ms, har 1 s ko'tarish)\n"
+            "  reja lotereya         lotereya: ustuvorlik = chiptalar soni\n"
+            "  reja taqqos [N]       tajriba: hamma algoritm bir xil yuklamada (N marta)\n"
+            "  reja ulush            tajriba: protsessor ulushi (adolat)\n");
+}
+
+/* v0.11: algoritmni tanlash, holat va tajribalar */
 void cmd_sched(const char *args)
 {
-    (void)args;
-    int ready = 0, total = 0;
+    while (*args == ' ')
+        args++;
+    if (strncmp(args, "rr", 2) == 0 && (args[2] == 0 || args[2] == ' ')) {
+        int ms = atoi(args + 2);
+        if (ms) {
+            if (ms < 10 || ms > 1000) {
+                kprintf("reja: kvant 10..1000 ms bo'lishi kerak\n");
+                return;
+            }
+            sched_set_quantum((uint32_t)ms * TIMER_HZ / 1000);
+        }
+        sched_set_policy(SCHED_RR);
+    } else if (strcmp(args, "prio") == 0) {
+        sched_set_policy(SCHED_PRIO);
+    } else if (strcmp(args, "mlfq") == 0) {
+        sched_set_policy(SCHED_MLFQ);
+    } else if (strcmp(args, "lotereya") == 0) {
+        sched_set_policy(SCHED_LOTTERY);
+    } else if (strncmp(args, "taqqos", 6) == 0) {
+        bool csv = false;
+        for (const char *p = args; *p; p++)
+            if (strncmp(p, "csv", 3) == 0)
+                csv = true;
+        schedbench_compare(atoi(args + 6), csv);
+        return;
+    } else if (strcmp(args, "ulush") == 0) {
+        schedbench_share(false);
+        return;
+    } else if (*args) {
+        sched_usage();
+        return;
+    }
+
+    static const char *desc[] = {
+        "Round-Robin, preemptive (navbat bilan)",
+        "qat'iy ustuvorlik, tenglar orasida navbat",
+        "MLFQ: 3 daraja, kvant 10/20/40 ms, har 1 s ko'tarish",
+        "lotereya: chiptalar = ustuvorlik",
+    };
+    sched_policy_t p = sched_policy();
+    kprintf("Algoritm:       %s - %s\n", sched_policy_name(p), desc[p]);
+    if (p != SCHED_MLFQ)
+        kprintf("Vaqt kvanti:    %u ms\n", sched_quantum() * 1000 / TIMER_HZ);
+    kprintf("Almashishlar:   %u marta (%u soniyada)\n", sched_switch_count(), timer_seconds());
+    kprintf("\nPID  NOMI      UST  DAR   CPU,ms  KUTGAN,ms  UYG'ONISH o'rt/maks, mks\n");
     for (int i = 0; i < MAX_TASKS; i++) {
         task_t *t = task_get(i);
         if (t->state == TASK_UNUSED)
             continue;
-        total++;
-        if (t->state == TASK_READY || t->state == TASK_RUNNING)
-            ready++;
+        if (t->pid == 0) {                         /* idle doim tayyor — kutish ma'nosiz */
+            kprintf("%3u  %-10s  -    -  %7u          -         - (bo'sh vaqt)\n", t->pid, t->name,
+                    t->cpu_ticks * (1000 / TIMER_HZ));
+            continue;
+        }
+        uint32_t avg = t->wakeups ? tsc_to_us(udiv64(t->wake_lat_sum, t->wakeups)) : 0;
+        kprintf("%3u  %-10s%3u  %3u  %7u  %9u  %8u / %u\n", t->pid, t->name, t->prio, t->level,
+                t->cpu_ticks * (1000 / TIMER_HZ), tsc_to_us(t->ready_wait) / 1000, avg,
+                tsc_to_us(t->wake_lat_max));
     }
-    kprintf("Algoritm:             Round-Robin, preemptive (majburiy)\n");
-    kprintf("Vaqt kvanti:          %u tick = %u ms\n", SCHED_QUANTUM, SCHED_QUANTUM * 1000 / TIMER_HZ);
-    kprintf("Taymer chastotasi:    %u Hz\n", TIMER_HZ);
-    kprintf("Vazifalar:            %d ta, ulardan ishlashga tayyor: %d\n", total, ready);
-    kprintf("Kontekst almashishlar: %u marta (%u soniyada)\n", sched_switch_count(), timer_seconds());
-    kprintf("Joriy vazifa:         PID %u (%s)\n", task_current()->pid, task_current()->name);
+    kprintf("UST - ustuvorlik (ustuvor), DAR - MLFQ darajasi. Boshqa algoritm: reja yordam\n");
+}
+
+/* nice PID N — vazifa ustuvorligi (1 past ... 10 tizim) */
+void cmd_nice(const char *args)
+{
+    while (*args == ' ')
+        args++;
+    uint32_t pid = (uint32_t)atoi(args);
+    while (*args && *args != ' ')
+        args++;
+    int prio = atoi(args);
+    if (!*args || prio < PRIO_MIN || prio > PRIO_SYSTEM) {
+        kprintf("Foydalanish: ustuvor PID N   (N: 1 - past ... 10 - tizim; user dasturlar - 5)\n"
+                "Ta'sir qiladi: reja prio va reja lotereya da\n");
+        return;
+    }
+    if (task_set_prio(pid, prio))
+        kprintf("PID %u ustuvorligi: %d\n", pid, prio);
+    else
+        kprintf("PID %u topilmadi\n", pid);
+}
+
+/* test [-v] — kernelning o'z-o'zini tekshirishi */
+void cmd_test(const char *args)
+{
+    while (*args == ' ')
+        args++;
+    selftest_run(strcmp(args, "-v") == 0);
 }

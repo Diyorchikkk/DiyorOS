@@ -139,7 +139,7 @@ static void open_image(const char *path, const uint8_t *data, uint32_t len)
 {
     surface_t img;
     if (!gfx_bmp_decode(data, len, &img)) {
-        kprintf("gui: %s - BMP o'qib bo'lmadi (faqat 24/32 bit, siqilmagan)\n", path);
+        kprintf("grafik: %s - BMP o'qib bo'lmadi (faqat 24/32 bit, siqilmagan)\n", path);
         return;
     }
     /* Ekranga sig'maydigan rasm: 2, 3... marta kichraytiramiz */
@@ -177,7 +177,7 @@ void app_viewer_open(const char *path)
 
     uint8_t *data = read_file(path, bmp ? IMAGE_MAX : TEXT_MAX, &len, &truncated);
     if (!data) {
-        kprintf("gui: %s ni ochib bo'lmadi\n", path);
+        kprintf("grafik: %s ni ochib bo'lmadi\n", path);
         return;
     }
     if (bmp) {

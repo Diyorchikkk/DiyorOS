@@ -12,6 +12,7 @@
 #include "cpu.h"
 #include "io.h"
 #include "task.h"
+#include "tsc.h"
 
 #define PIT_FREQUENCY 1193182
 #define PIT_CHANNEL0  0x40
@@ -74,4 +75,56 @@ void timer_sleep_ms(uint32_t ms)
 void timer_on_second(void (*callback)(uint32_t seconds))
 {
     second_callback = callback;
+}
+
+/* ------------------------------ TSC (v0.11) ------------------------------ */
+
+static uint32_t khz = 0;
+static uint64_t tsc_boot = 0;
+
+bool tsc_available(void)
+{
+    uint32_t a = 1, b, c = 0, d;
+    __asm__ volatile ("cpuid" : "+a"(a), "=b"(b), "+c"(c), "=d"(d));
+    return d & (1u << 4);                  /* CPUID.1:EDX bit 4 — TSC */
+}
+
+/* 5 ta taymer tikida (50 ms) TSC qanchaga o'sadi -> chastota */
+void tsc_calibrate(void)
+{
+    if (!tsc_available())
+        return;
+    uint32_t t = ticks;
+    while (ticks == t)                     /* tik chegarasini kutamiz — o'lchov aniqroq */
+        __asm__ volatile ("hlt");
+    uint64_t start = rdtsc();
+    t = ticks;
+    while (ticks - t < 5)
+        __asm__ volatile ("hlt");
+    uint64_t cycles = rdtsc() - start;
+    khz = (uint32_t)udiv64(cycles, 5 * 1000 / frequency);   /* 50 ms -> 1 ms dagi taktlar */
+    tsc_boot = start;
+}
+
+uint32_t tsc_khz(void) { return khz; }
+
+uint32_t tsc_to_us(uint64_t cycles)
+{
+    if (khz < 1000)
+        return 0;
+    return (uint32_t)udiv64(cycles, khz / 1000);
+}
+
+uint32_t tsc_to_ns(uint64_t cycles)
+{
+    if (!khz)
+        return 0;
+    return (uint32_t)udiv64(cycles * 1000000, khz);
+}
+
+uint64_t tsc_now_us(void)
+{
+    if (khz < 1000)
+        return (uint64_t)ticks * (1000000 / frequency);
+    return udiv64(rdtsc() - tsc_boot, khz / 1000);
 }

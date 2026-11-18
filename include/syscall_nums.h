@@ -39,7 +39,8 @@
 #define SYS_DUP2     23   /* dup2(fd, yangi)                 — "yangi" ni yopib, fd nusxasini qo'yish */
 #define SYS_CHDIR    24   /* chdir(yo'l)                     — jarayonning joriy papkasi */
 #define SYS_GETCWD   25   /* getcwd(buf, hajm)               — joriy papka yo'li */
-#define SYS_COUNT    26
+#define SYS_UNLINK   26   /* unlink(yo'l)                    — faylni o'chirish (v0.11) */
+#define SYS_COUNT    27
 
 /* open() flaglari (VFS dagi bilan bir xil) */
 #define O_READ    0x01
@@ -58,6 +59,7 @@ struct sysinfo {
     char         os_name[16];
     char         os_version[8];
     unsigned int stdio;          /* v0.8: SI_STDIN_PIPE | SI_STDOUT_PIPE — yo'naltirilganmi */
+    unsigned int cpu_khz;        /* v0.11: protsessor taktlari chastotasi (rdtsc ni vaqtga aylantirish) */
 };
 #define SI_STDIN_PIPE  1         /* stdin klaviatura emas (kanal) */
 #define SI_STDOUT_PIPE 2         /* stdout ekran emas (kanal) */

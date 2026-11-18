@@ -54,11 +54,11 @@ void rootfs_init(void)
 
     write_file("/home/diyorbek/salom.txt",
                "Salom! Bu DiyorOS dagi birinchi fayl.\n"
-               "Uni tahrirlash uchun: edit salom.txt\n"
-               "Dasturlar: ls /bin, keyin nomini yozing (masalan: hello)\n"
-               "Kernel jurnali: dmesg\n"
-               "Grafik rejim: gui\n"
-               "Kanallar: ls /bin | grep o | wc,  sanoq 100 > /disk/son.txt\n"
+               "Uni tahrirlash uchun: tahrir salom.txt\n"
+               "Dasturlar: royxat /bin, keyin nomini yozing (masalan: hello)\n"
+               "Kernel jurnali: jurnal\n"
+               "Grafik rejim: grafik\n"
+               "Kanallar: royxat /bin | grep o | wc,  sanoq 100 > /disk/son.txt\n"
                "Sinxronizatsiya namoyishlari: sinx\n");
 
     write_file("/home/diyorbek/rejalar.txt",
@@ -66,7 +66,7 @@ void rootfs_init(void)
                "==============\n"
                "v0.1  yuklanish, uzilishlar, drayverlar, shell     [tayyor]\n"
                "v0.2  xotira: PMM, paging, kmalloc/kfree           [tayyor]\n"
-               "v0.3  multitasking: scheduler, ps, kill            [tayyor]\n"
+               "v0.3  multitasking: scheduler, jarayonlar, toxtat [tayyor]\n"
                "v0.4  fayl tizimi: VFS, ramfs, procfs, muharrir    [tayyor]\n"
                "v0.5  user mode, syscall, ELF dasturlar            [tayyor]\n"
                "v0.6  disk drayveri, FAT32                         [tayyor]\n"

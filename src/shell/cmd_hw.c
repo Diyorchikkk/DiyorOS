@@ -1,5 +1,5 @@
 /*
- * cmd_hw.c — "hw": kompyuter haqida qisqa hisobot (v0.9).
+ * cmd_hw.c — "qurilma": kompyuter haqida qisqa hisobot (v0.9).
  *
  * Haqiqiy kompyuterda sinaganda shu ekranni suratga olish kifoya: qaysi
  * protsessor, qancha xotira, ekran qanday olingan, disk qaysi drayver

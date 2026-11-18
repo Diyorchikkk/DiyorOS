@@ -2,7 +2,7 @@
  * wc — qatorlar, so'zlar va baytlarni sanash (v0.8, Unix dagi wc).
  *
  *   wc fayl          fayldagi qator / so'z / bayt soni
- *   ls | wc          boshqa buyruqning chiqishini sanash (kanal orqali)
+ *   royxat | wc      boshqa buyruqning chiqishini sanash (kanal orqali)
  *   wc               klaviaturadan: yozib bo'lgach bo'sh qatorda Ctrl+D
  *
  * Dastur qayerdan o'qiyotganini bilmaydi ham: kanal, fayl yoki klaviatura —
