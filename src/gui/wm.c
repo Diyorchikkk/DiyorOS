@@ -825,7 +825,7 @@ static void draw_desktop(surface_t *s)
     int lx = (SCREEN_W - lw) / 2 + 40, ly = 230;
     gfx_text_scaled(s, lx + 4, ly + 4, logo, scale, RGB(14, 40, 66));
     gfx_text_scaled(s, lx, ly, logo, scale, RGB(52, 104, 150));
-    const char *sub = "v" OS_VERSION "  |  C + Assembly, x86, noldan yozilgan";
+    const char *sub = "v" OS_VERSION "  |  C + Assembly, x86";
     gfx_text(s, (SCREEN_W - gfx_text_width(sub)) / 2 + 40, ly + 16 * scale + 10, sub,
              RGB(150, 190, 215), GFX_TRANSPARENT);
 

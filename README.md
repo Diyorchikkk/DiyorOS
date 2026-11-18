@@ -1,8 +1,6 @@
 # DiyorOS v0.11
 
-C va Assembly'da noldan yozilgan operatsion tizim. Arxitektura: x86, 32-bit protected mode.
-Linux, Windows yoki boshqa OS kodidan foydalanilmagan: kompyuter yoqilgandan keyin ekranga chiqadigan
-hamma narsani shu kod boshqaradi.
+C va Assembly'da yozilgan operatsion tizim. Arxitektura: x86, 32-bit protected mode.
 
 ![DiyorOS grafik rejimi](docs/gui.png)
 

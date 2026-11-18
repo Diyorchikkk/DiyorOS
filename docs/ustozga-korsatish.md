@@ -5,7 +5,7 @@ ko'rsatiladi; grafik rejim — oxirida. Adashsangiz: `tozala`, dastur qotsa: **C
 
 | № | Buyruq | Nima deyish kerak (1–2 gap) |
 |---|---|---|
-| 1 | (yuklanish ekrani) | "Bu o'zim yozgan OS: C va assembler, 22 ming qator. Har bir `[ OK ]` — alohida qism: xotira, uzilishlar, drayverlar, fayl tizimi, scheduler." |
+| 1 | (yuklanish ekrani) | "OS C va assemblerda yozilgan, ~22 ming qator. Har bir `[ OK ]` — alohida qism: xotira, uzilishlar, drayverlar, fayl tizimi, scheduler." |
 | 2 | `jarayonlar`, `yurgiz busy`, `jarayonlar`, `toxtat 2` | "Multitasking preemptive: `busy` cheksiz tsiklda, lekin shell darhol javob beradi — taymer vazifani majburan almashtiradi, MLFQ esa ko'p uxlaydigan shell ni yuqori navbatda ushlaydi." |
 | 3 | `hello` | "Bu dastur ring 3 da, o'z manzil fazosida ishlaydi. Kernel bilan faqat `int 0x80` syscall orqali gaplashadi." |
 | 4 | `hack 2`, `hack 5` | "Dastur kernel xotirasiga yozmoqchi bo'ldi, keyin uzilishlarni o'chirmoqchi (`cli`) — protsessor ruxsat bermadi, kernel faqat shu dasturni o'ldirdi. Tizim ishlayapti." |

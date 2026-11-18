@@ -36,7 +36,7 @@ static void about_draw(window_t *w)
     /* Logotip va nom */
     ui_logo(s, 24, 20, 56);
     gfx_text_scaled(s, 96, 18, OS_NAME, 3, RGB(255, 255, 255));
-    gfx_text(s, 98, 70, "Versiya " OS_VERSION " - noldan yozilgan OS",
+    gfx_text(s, 98, 70, "Versiya " OS_VERSION,
              RGB(200, 220, 250), GFX_TRANSPARENT);
 
     int y = 112;
@@ -45,7 +45,7 @@ static void about_draw(window_t *w)
         gfx_text_bold(s, 24, y + i * 22, labels[i], COL_TEXT_DIM);
     gfx_text(s, 150, y, OS_AUTHOR, COL_TEXT, GFX_TRANSPARENT);
     gfx_text(s, 150, y + 22, OS_ARCH, COL_TEXT, GFX_TRANSPARENT);
-    gfx_text(s, 150, y + 44, "C va GNU Assembly (kutubxonalarsiz)", COL_TEXT, GFX_TRANSPARENT);
+    gfx_text(s, 150, y + 44, "C va GNU Assembly", COL_TEXT, GFX_TRANSPARENT);
     ksnprintf(buf, sizeof(buf), "%ux%u, 32 bit rang (%s)", fb_info()->width, fb_info()->height,
               fb_info()->boot ? "bootloader ekrani" : "Bochs VBE");
     gfx_text(s, 150, y + 66, buf, COL_TEXT, GFX_TRANSPARENT);
